@@ -55,6 +55,21 @@ object StatusListCodec {
         value: Int,
     ): Int = (value and valueMask(bitsPerEntry)) shl position(idx, bitsPerEntry).shift
 
+    fun byteUpdates(
+        indexes: Collection<Int>,
+        bitsPerEntry: Int,
+        value: Int,
+    ): List<ByteUpdate> =
+        indexes
+            .groupBy { position(it, bitsPerEntry).byteIndex }
+            .map { (byteIndex, entries) ->
+                ByteUpdate(
+                    byteIndex = byteIndex,
+                    clearMask = entries.fold(BYTE_MASK) { mask, idx -> mask and clearMask(idx, bitsPerEntry) },
+                    setBits = entries.fold(0) { bits, idx -> bits or setBits(idx, bitsPerEntry, value) },
+                )
+            }
+
     fun setStatus(
         data: ByteArray,
         bitsPerEntry: Int,
@@ -119,4 +134,10 @@ object StatusListCodec {
 data class BitPosition(
     val byteIndex: Int,
     val shift: Int,
+)
+
+data class ByteUpdate(
+    val byteIndex: Int,
+    val clearMask: Int,
+    val setBits: Int,
 )

@@ -94,8 +94,8 @@ data class AndroidRegisterRequest(
     @Schema(description = "Base64-encoded X.509 EC public key for MDVM authentication")
     val authPubk: String,
     @SerialName(WI_DEVICE_CLASS_FIELD)
-    @Schema(description = "Device class properties as key-value pairs", example = ANDROID_DEVICE_INFO_EXAMPLE)
-    val deviceClass: Map<String, String>,
+    @Schema(description = "Device class properties", example = ANDROID_DEVICE_INFO_EXAMPLE)
+    val deviceClass: AndroidDeviceInfo,
     @SerialName(WI_ANDROID_KEY_ATTESTATION_FIELD)
     @Schema(
         description = "Base64-encoded X.509 certificate chain from Android Key Attestation",
@@ -107,8 +107,8 @@ data class AndroidRegisterRequest(
 @Serializable
 data class AndroidRenewalRequest(
     @SerialName(WI_DEVICE_CLASS_FIELD)
-    @Schema(description = "Device class properties as key-value pairs", example = ANDROID_DEVICE_INFO_EXAMPLE)
-    val deviceClass: Map<String, String>,
+    @Schema(description = "Device class properties", example = ANDROID_DEVICE_INFO_EXAMPLE)
+    val deviceClass: AndroidDeviceInfo,
     @SerialName(WI_ANDROID_KEY_ATTESTATION_FIELD)
     @Schema(
         description = "Base64-encoded X.509 certificate chain from Android Key Attestation",
@@ -123,8 +123,8 @@ data class IosRegisterRequest(
     @Schema(description = "Base64-encoded X.509 EC public key for MDVM authentication")
     val authPubk: String,
     @SerialName(WI_DEVICE_CLASS_FIELD)
-    @Schema(description = "Device class properties as key-value pairs", example = IOS_DEVICE_INFO_EXAMPLE)
-    val deviceClass: Map<String, String>,
+    @Schema(description = "Device class properties", example = IOS_DEVICE_INFO_EXAMPLE)
+    val deviceClass: IosDeviceInfo,
     @SerialName(PAP_DEVICECHECK_ATTESTATION_FIELD)
     @Schema(description = "Base64-encoded Apple DeviceCheck attestation", example = DEVICECHECK_ATTESTATION_EXAMPLE)
     val deviceAttestation: String,
@@ -136,8 +136,8 @@ data class IosRegisterRequest(
 @Serializable
 data class IosRenewalRequest(
     @SerialName(WI_DEVICE_CLASS_FIELD)
-    @Schema(description = "Device class properties as key-value pairs", example = IOS_DEVICE_INFO_EXAMPLE)
-    val deviceClass: Map<String, String>,
+    @Schema(description = "Device class properties", example = IOS_DEVICE_INFO_EXAMPLE)
+    val deviceClass: IosDeviceInfo,
     @SerialName(PAP_DEVICECHECK_ASSERTION_FIELD)
     @Schema(description = "Base64-encoded Apple DeviceCheck assertion", example = DEVICECHECK_ASSERTION_EXAMPLE)
     val deviceAssertion: String,
@@ -229,13 +229,14 @@ class MdvmApi(
 
                 mdvmService.verifyAndroidDeviceProperties(
                     attestedDetails = it.attestationDetails,
+                    deviceClass = request.deviceClass,
                     storedDetails = null,
                 )
             }
             val account =
                 mdvmAccountService.createAndroidAccount(
                     authPubk = authPubk,
-                    deviceClass = DeviceInfo(request.deviceClass),
+                    deviceClass = request.deviceClass,
                     attestationData = attestationData,
                 )
             val mdvmToken = mdvmTokenBuilder.create(authPubk, account.mdvmAccountId)
@@ -299,13 +300,14 @@ class MdvmApi(
             attestationData?.let {
                 mdvmService.verifyAndroidDeviceProperties(
                     attestedDetails = it.attestationDetails,
+                    deviceClass = request.deviceClass,
                     storedDetails = account.androidDeviceAttestation,
                 )
             }
 
             mdvmAccountService.saveNonRevokedAccount(
                 account.mdvmAccountId,
-                deviceClass = DeviceInfo(request.deviceClass),
+                deviceClass = request.deviceClass,
                 androidAttestationDetails = attestationData?.attestationDetails,
             )
             val mdvmToken = mdvmTokenBuilder.create(authPubk, account.mdvmAccountId)
@@ -364,12 +366,12 @@ class MdvmApi(
                     0,
                     skipIntegrityChecks,
                 )
-            mdvmService.verifyIosDeviceProperties(DeviceInfo(request.deviceClass), storedDeviceClass = null)
+            mdvmService.verifyIosDeviceProperties(request.deviceClass, storedDeviceClass = null)
 
             val account =
                 mdvmAccountService.createIosAccount(
                     authPubk = authPubk,
-                    deviceClass = DeviceInfo(request.deviceClass),
+                    deviceClass = request.deviceClass,
                     deviceAttestation = attestation,
                     deviceAssertion = assertion,
                 )
@@ -421,12 +423,17 @@ class MdvmApi(
                     account.iosDeviceAssertion?.counter ?: 0,
                     skipIntegrityChecks,
                 )
+            mdvmService.verifyIosDeviceProperties(request.deviceClass, account.iosDeviceClass())
 
-            mdvmService.verifyIosDeviceProperties(DeviceInfo(request.deviceClass), account.deviceClass)
+            mdvmService.logCounterJumpIfRequired(
+                account.mdvmAccountId,
+                account.iosDeviceAssertion?.counter,
+                assertion?.counter,
+            )
 
             mdvmAccountService.saveNonRevokedAccount(
                 account.mdvmAccountId,
-                deviceClass = DeviceInfo(request.deviceClass),
+                deviceClass = request.deviceClass,
                 iosDeviceAssertion = assertion,
             )
 

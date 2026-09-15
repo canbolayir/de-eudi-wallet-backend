@@ -1,0 +1,12 @@
+hsm:
+  module-library: /usr/local/lib/softhsm/libsofthsm2.so
+  slot-label: TEST_SLOT
+  slot-pin: 1234
+  key-prefix: softhsm
+  pool-size: 1
+
+rwsca:
+  wi-slot:
+    label: ${hsm.slot-label}
+    pin: ${hsm.slot-pin}
+    pool-size: ${hsm.pool-size}

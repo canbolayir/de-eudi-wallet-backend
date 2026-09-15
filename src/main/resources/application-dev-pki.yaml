@@ -1,0 +1,4 @@
+pki:
+  dev-pki-dir: ${DEV_PKI_DIR:softhsm/generated/dev-pki/roots}
+  nw-root-cert-path: file:${pki.dev-pki-dir}/nw-root.pem
+  mdvm-root-cert-path: file:${pki.dev-pki-dir}/mdvm-root.pem

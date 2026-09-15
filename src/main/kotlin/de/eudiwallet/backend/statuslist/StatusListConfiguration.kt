@@ -25,8 +25,11 @@ class StatusListConfiguration(
     publicUrl: String,
     val pathSegment: String,
     pools: Map<String, PoolProperties>,
+    val gc: GcProperties = GcProperties(),
 ) {
     private val baseUrl = publicUrl.trimEnd('/')
+
+    val blockMaxAge: Duration = gc.listDeleteSlack.dividedBy(2)
 
     private val resolvedPools: Map<String, Pool> =
         pools.mapValues { (id, props) -> props.resolve(id) }.also { it.values.forEach(Pool::validate) }
@@ -49,6 +52,18 @@ class StatusListConfiguration(
     fun aggregationUri(pool: Pool): String = "$baseUrl/status-lists/$pathSegment/${pool.id}/aggregation"
 }
 
+class GcProperties(
+    val batchSize: Int = 5000,
+    val listDeleteSlack: Duration = Duration.ofDays(1),
+) {
+    init {
+        require(batchSize > 0) { "statuslist.gc.batch-size must be positive" }
+        require(!listDeleteSlack.isZero && !listDeleteSlack.isNegative) {
+            "statuslist.gc.list-delete-slack must be positive"
+        }
+    }
+}
+
 class PoolProperties(
     val entriesPerList: Int,
     val bitsPerEntry: Int,
@@ -57,6 +72,7 @@ class PoolProperties(
     val lifetime: Duration,
     val tslAuthKeyPrefix: String,
     val tslRootCertPath: Resource,
+    val reservationSize: Int,
 ) {
     fun resolve(id: String): Pool =
         Pool(
@@ -67,7 +83,8 @@ class PoolProperties(
             ttl = ttl,
             lifetime = lifetime,
             tslAuthKeyPrefix = tslAuthKeyPrefix,
-            tslRootCert = readX509Cert(tslRootCertPath).apply { checkValidity() },
+            tslRootCertPath = tslRootCertPath,
+            reservationSize = reservationSize,
         )
 }
 
@@ -79,8 +96,11 @@ data class Pool(
     val ttl: Duration,
     val lifetime: Duration,
     val tslAuthKeyPrefix: String,
-    val tslRootCert: X509Certificate,
+    val tslRootCertPath: Resource,
+    val reservationSize: Int,
 ) {
+    val tslRootCert: X509Certificate by lazy { readX509Cert(tslRootCertPath).apply { checkValidity() } }
+
     fun validate() {
         require(entriesPerList >= MIN_SIZE) {
             "pool '$id': entriesPerList must be at least $MIN_SIZE (smaller pools make index scattering too slow)"
@@ -93,6 +113,7 @@ data class Pool(
         }
         require(!ttl.isZero && !ttl.isNegative) { "pool '$id': ttl must be positive" }
         require(lifetime >= ttl.multipliedBy(2)) { "pool '$id': lifetime must be at least 2*ttl" }
+        require(reservationSize in 1..entriesPerList) { "pool '$id': reservationSize must be in 1..entriesPerList" }
     }
 
     private companion object {

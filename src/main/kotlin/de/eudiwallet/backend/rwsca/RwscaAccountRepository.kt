@@ -74,6 +74,8 @@ interface RwscaAccountRepository : CoroutineCrudRepository<RwscaAccountEntity, U
     )
     suspend fun revokeByWiHandle(wiHandle: String): Long
 
+    suspend fun existsByWiHandleAndRevokedAtIsNotNull(wiHandle: String): Boolean
+
     @Query(
         """
             UPDATE $RWSCA_ACCOUNT_TABLE

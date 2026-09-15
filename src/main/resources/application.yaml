@@ -1,0 +1,162 @@
+spring:
+  main:
+    banner-mode: off
+  lifecycle:
+    timeout-per-shutdown-phase: 25s
+  config:
+    import: optional:classpath:META-INF/build-info.properties
+  application:
+    name: wallet-backend
+  profiles:
+    active: ${deployment.environment}
+    group:
+      test: softhsm,dev-pki
+      local-dev: softhsm,dev-pki
+      ci-test: softhsm,dev-pki
+      build-docs: softhsm
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    url: jdbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=${DB_SSL_MODE:disable}&sslrootcert=${DB_SSL_ROOT_CERT:}&sslcert=${DB_SSL_CERT:}&sslkey=${DB_SSL_KEY:}
+    user: ${DB_USER}
+    password: ${DB_PASS}
+  r2dbc:
+    url: r2dbc:postgresql://${DB_HOST}:${DB_PORT}/${DB_NAME}?sslMode=${DB_SSL_MODE:disable}&sslRootCert=${DB_SSL_ROOT_CERT:}&sslCert=${DB_SSL_CERT:}&sslKey=${DB_SSL_KEY:}
+    username: ${DB_USER}
+    password: ${DB_PASS}
+    pool:
+      minIdle: 5
+      maxSize: 25
+      maxCreateConnectionTime: 5s
+      maxAcquireTime: 10s
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:}
+    security:
+      protocol: ${KAFKA_SECURITY_PROTOCOL:SSL}
+    ssl:
+      key-store-location: ${KAFKA_KEY_STORE_LOCATION:}
+      key-store-password: ${KAFKA_KEY_STORE_PASSWORD:}
+      key-store-type: PKCS12
+      trust-store-location: ${KAFKA_TRUST_STORE_LOCATION:}
+      trust-store-password: ${KAFKA_TRUST_STORE_PASSWORD:}
+      trust-store-type: PKCS12
+    producer:
+      acks: all
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+      properties:
+        enable.idempotence: true
+        max.block.ms: 10000
+        request.timeout.ms: 10000
+        delivery.timeout.ms: 15000
+    consumer:
+      max-poll-records: 5
+      enable-auto-commit: false
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        max.poll.interval.ms: 300000
+  web:
+    error:
+      include-message: never
+      include-stacktrace: never
+      include-binding-errors: never
+      include-exception: false
+
+server:
+  shutdown: graceful
+
+deployment:
+  environment:
+
+api-contract-version: 15.2.0
+
+info:
+  application:
+    name: EUDI-Wallet backend service
+    version: ${build.version:${api-contract-version}}
+
+management:
+  info:
+    env:
+      enabled: true
+    build:
+      enabled: false
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      group:
+        readiness:
+          include: readinessState, r2dbc, hsm
+          show-details: always
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+  nullable-request-parameter-enabled: true
+  use-fqn: true
+
+hsm:
+  key-prefix: ${deployment.environment}
+
+challenge:
+  rwscd-challenge-symk-prefix: ${hsm.key-prefix}-rwscd_challenge_symk
+
+mdvm-token:
+  issuer: german-national-wallet:mdvm:${deployment.environment}
+  mdvm-root-cert-path: ${pki.mdvm-root-cert-path}
+
+wallet-revocation:
+  topic: ${WALLET_REVOCATION_TOPIC}
+  group:
+    wpb: ${WALLET_REVOCATION_GROUP_WPB:wpb-wi-revocation}
+    rwsca: ${WALLET_REVOCATION_GROUP_RWSCA:rwsca-wi-revocation}
+    mdvm: ${WALLET_REVOCATION_GROUP_MDVM:mdvm-wi-revocation}
+
+push-notification:
+  topic: ${PUSH_NOTIFICATION_TOPIC}
+  group:
+    pns: ${PUSH_NOTIFICATION_GROUP_PNS:pns-push-notification}
+
+key-rollover:
+  poll-interval: PT1H
+  initial-delay: PT1H
+
+telemetry:
+  filter-client-url-attributes: true
+  filter-ip-attributes: true
+
+logging:
+  pattern:
+    level: "[%X{trace_id},%X{span_id}]%5p"
+
+otel:
+  resource:
+    attributes:
+      service:
+        version: ${info.application.version}
+  instrumentation:
+    logback-appender:
+      experimental:
+        capture-logger-context-attributes: true
+  java:
+    disabled:
+      resource:
+        providers:
+          - io.opentelemetry.instrumentation.resources.ProcessResourceProvider
+  service:
+    name: ${spring.application.name}-${deployment.environment}
+  traces:
+    exporter: otlp
+  metrics:
+    exporter: otlp
+  logs:
+    exporter: none

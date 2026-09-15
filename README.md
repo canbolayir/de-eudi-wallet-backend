@@ -1,28 +1,76 @@
 # Wallet backend
 
-This repository contains backend components of the German National Wallet: 
+This repository contains backend components of the German National Wallet:
+
 * **WPB** (Wallet Provider Backend, Wallet Instance Attestations),
 * **RWSCA** (Remote Wallet Secure Cryptographic Application, PIN sessions / remote signing / Wallet Trust Evidence),
 * **MDVM** (mobile device verification, platform-integrity checks and MDVM tokens),
 * **PNS** (Push Notifications Service), and
 * status lists (Token Status List allocation and serving).
 
-Each of WPB, RWSCA, MDVM and PNS ships as its own Spring Boot entry point; status lists are served by WPB.
-A combined application runs all of them together.
-The wallet mobile app (the Wallet Instance) is the only client of the authenticated APIs;
-the status-list read surface is public and unauthenticated, consumed by the PID Provider.
+Each of WPB, RWSCA, MDVM and PNS ships as its own Spring Boot entry point; status lists are served by WPB. A combined
+application runs all of them together. The wallet mobile app (the Wallet Instance) is the only client of the
+authenticated APIs; the status-list read surface is public and unauthenticated, consumed by the PID Provider.
 
 This repository is one-way, read-only and flows out of an internal repository.
 
-## Scope
+## Build and run
 
-**Configuration file is coming** Currently, the shape of what the code accepts and its compiled-in defaults are readable from the classes that declare the settings. 
+Prerequisites: a JDK 25, Docker with the compose plugin, `openssl`.
+
+1. **Generate the local key material.** The SoftHSM key fixtures and the dev PKI (signing keys, roots, chains) are
+   not published; the compose stack builds the keys into its images and mounts the roots and chains (see
+   [`softhsm/README.md`](softhsm/README.md)).
+   ```bash
+   ./softhsm/gen-keys.sh
+   ```
+2. **Build the jars.**
+   ```bash
+   ./gradlew bootJar bootJarMdvm bootJarRwsca bootJarWpb bootJarPns
+   ```
+3. **Start the stack.** [`docker-compose.yml`](docker-compose.yml) runs PostgreSQL, Kafka, a simulated S3 bucket seeded
+   with the generated chains, and the applications on SoftHSM. The combined application listens on
+   `localhost:8080`:
+   ```bash
+   docker compose up --build --wait app-combined
+   curl -s localhost:8080/actuator/health/readiness
+   ```
+   The same file also defines the four separated services (`app-mdvm`, `app-rwsca`, `app-wpb`, `app-pns`), each with its
+   own database. They publish no host port and are reachable inside the compose network only:
+   ```bash
+   docker compose up --build --wait app-mdvm app-rwsca app-wpb app-pns
+   ```
+
+`./gradlew build` additionally runs the linters. The test suites are not published, so it executes no tests.
+
+## Local stack limitations
+
+- **Push delivery is off.** PNS stores registrations. Consuming the push-notification topic (`PNS_PUSH_ENABLED`) and the
+  FCM transport (`PNS_FCM_ENABLED`, plus a service-account key) are two separate switches; the compose stack sets
+  neither.
+- **The compose stack relaxes the integrity checks.** `docker-compose.yml` starts MDVM with
+  `DEPLOYMENT_ENVIRONMENT: ci-test`, so `src/main/resources/application-ci-test.yaml` applies. That profile lets a
+  client skip the platform integrity checks (`allow-skip-key-attestation`: a register or renewal call to MDVM with the
+  `Skip-Integrity-Checks: all` request header and no valid attestation still produces an MDVM token), accepts
+  software-backed Android keys (`allow-software-key-attestation`) and accepts iOS App Attest development-environment
+  attestations (`allow-app-attest-dev-environment`). Skipping is per request and opt-in: a call without the header, or
+  with `Skip-Integrity-Checks: none`, is verified in full.
+- **The wallet app identity is a placeholder.** The same profile sets the Android package name and signing fingerprint
+  (`android.integrity.expected-package-names`, `expected-signer-fingerprints`) and the iOS bundle id and Apple team id
+  (`ios.integrity.acceptable-bundle-id-list`, `app-id`) to `org.example.wallet` and zeros. Set these properties to your
+  app's values to verify its attestations.
+- **The attestation data lists are empty.** `src/main/resources/android/certificate-revocations.json` and both
+  `vulnerable_device_classes.json` files are placeholders without entries; the curated lists are not published. Only
+  Google's attestation CRL revokes certificates in an Android key attestation chain, and no device is ever classified
+  vulnerable.
 
 ## Contributing and issues
 
-Issue tracking and pull requests are **not** enabled on this mirror right now. Issue tracking is planned to be enabled in September.
+Issue tracking and pull requests are **not** enabled on this mirror right now. Issue tracking is planned to be enabled
+in October 2026.
 
-Any findings, especially security related ones are very welcome. Please find details on the bug bounty in [SECURITY.md](SECURITY.md).
+Any findings, especially security related ones are very welcome. Please find details on the bug bounty
+in [SECURITY.md](SECURITY.md).
 
 ## Related documentation
 

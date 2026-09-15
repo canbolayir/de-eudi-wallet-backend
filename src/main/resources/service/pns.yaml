@@ -1,0 +1,9 @@
+pns:
+  enabled: true
+  issuer: german-national-wallet:pns:${deployment.environment}
+  push:
+    enabled: ${PNS_PUSH_ENABLED:false}
+  fcm:
+    enabled: ${PNS_FCM_ENABLED:false}
+    project-id: ${PNS_FCM_PROJECT_ID:}
+    service-account-key-path: ${PNS_FCM_SERVICE_ACCOUNT_KEY_PATH:}

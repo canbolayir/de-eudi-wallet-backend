@@ -264,6 +264,7 @@ class WpbApi(
                 httpRequest,
                 REQUIRED_SIGNATURE_ATTESTATION_COMPONENTS,
             ).authKey
+        val account = wpbAccountService.findActiveAccount(wpbAccountId, wiMdvmAuthPubk)
         val wiWiaPubk = extractWiaPubk(request.wiWiaPubk)
         httpSignatureVerifier.verifyRequestSignature(
             httpRequest,
@@ -271,12 +272,7 @@ class WpbApi(
             REQUIRED_SIGNATURE_ATTESTATION_COMPONENTS,
             wiWiaPubk,
         )
-        val statusReference =
-            wpbAccountService.findAccountAndProvisionWiaEntry(
-                wpbAccountId,
-                wiMdvmAuthPubk,
-                request.wpbClientInstanceId?.id,
-            )
+        val statusReference = wpbAccountService.provisionWiaEntry(account, request.wpbClientInstanceId?.id)
         WpbAttestationResponse(
             wiaBuilder.createAndSerializeToJwt(wiWiaPubk, statusReference),
             WpbClientInstanceId(statusReference.clientInstanceId),

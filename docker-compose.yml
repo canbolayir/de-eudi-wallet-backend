@@ -1,0 +1,235 @@
+x-app-env: &app-env
+  DEPLOYMENT_ENVIRONMENT: ci-test
+  DEV_PKI_DIR: /etc/pki
+  DB_PORT: 5432
+  DB_USER: postgres
+  DB_PASS: password
+  S3_ENDPOINT: http://s3:9000
+  S3_REGION: us-east-1
+  S3_BUCKET: dev-certs
+  S3_ACCESS_KEY: rustfsadmin
+  S3_SECRET_KEY: rustfssecret
+  HSM_MODULE_LIBRARY: /usr/lib/softhsm/libsofthsm2.so
+  HSM_SLOT_LABEL: TEST_SLOT
+  HSM_SLOT_PIN: 1234
+  OTEL_TRACES_EXPORTER: none
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+  MESSAGING_KAFKA_ENABLED: "true"
+  KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+  KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+  WALLET_REVOCATION_TOPIC: wallet-instance-revocation
+  PUSH_NOTIFICATION_TOPIC: push-notification
+
+x-app-volumes: &app-volumes
+  - ./softhsm/generated/dev-pki/roots:/etc/pki:ro
+
+x-app-healthcheck: &app-healthcheck
+  test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health/readiness"]
+  interval: 5s
+  timeout: 5s
+  retries: 10
+  start_period: 60s
+
+services:
+  app-combined:
+    build:
+      context: .
+      dockerfile: softhsm/Dockerfile
+    depends_on:
+      db-combined:
+        condition: service_started
+      s3-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+      DB_HOST: db-combined
+      DB_NAME: db
+      STATUSLIST_PUBLIC_URL: http://app-combined:8080
+    healthcheck: *app-healthcheck
+    volumes: *app-volumes
+    ports:
+      - "127.0.0.1:8080:8080"
+  app-mdvm:
+    build:
+      context: .
+      dockerfile: softhsm/Dockerfile
+      args:
+        APP_JAR: wallet-backend-mdvm.jar
+    depends_on:
+      db-separated:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+      DB_HOST: db-separated
+      DB_NAME: mdvm
+    healthcheck: *app-healthcheck
+    volumes: *app-volumes
+  app-rwsca:
+    build:
+      context: .
+      dockerfile: softhsm/Dockerfile
+      args:
+        APP_JAR: wallet-backend-rwsca.jar
+    depends_on:
+      db-separated:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+      DB_HOST: db-separated
+      DB_NAME: rwsca
+    healthcheck: *app-healthcheck
+    volumes: *app-volumes
+  app-wpb:
+    build:
+      context: .
+      dockerfile: softhsm/Dockerfile
+      args:
+        APP_JAR: wallet-backend-wpb.jar
+    depends_on:
+      db-separated:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+      DB_HOST: db-separated
+      DB_NAME: wpb
+      STATUSLIST_PUBLIC_URL: http://app-wpb:8080
+    healthcheck: *app-healthcheck
+    volumes: *app-volumes
+  app-pns:
+    build:
+      context: .
+      dockerfile: softhsm/Dockerfile
+      args:
+        APP_JAR: wallet-backend-pns.jar
+    depends_on:
+      db-separated:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      <<: *app-env
+      DB_HOST: db-separated
+      DB_NAME: pns
+    healthcheck: *app-healthcheck
+    volumes: *app-volumes
+  kafka:
+    image: apache/kafka:4.3.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+  kafka-init:
+    image: apache/kafka:4.3.0
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: [""]
+    environment: *app-env
+    command:
+      - /bin/sh
+      - -c
+      - |
+        # Fail the init container on the first failed create — without set -e only the last command's status counts.
+        set -e
+        # Log-compacted, no time retention: a Wallet Instance revocation is a permanent fact, and compaction makes
+        # publish-before-consume safe (events published before any consumer exists never expire).
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+          --create --if-not-exists \
+          --topic "$$WALLET_REVOCATION_TOPIC" \
+          --partitions 3 --replication-factor 1 \
+          --config cleanup.policy=compact --config retention.ms=-1
+        # Time-retained (7 days) and not compacted: a push notification is a transient instruction to a device, and a
+        # compacted forever-topic would re-push the whole history on a consumer-group reset.
+        /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 \
+          --create --if-not-exists \
+          --topic "$$PUSH_NOTIFICATION_TOPIC" \
+          --partitions 3 --replication-factor 1 \
+          --config cleanup.policy=delete --config retention.ms=604800000
+  db-combined:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=db
+  db-separated:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+    configs:
+      - source: init-db-separated
+        target: /docker-entrypoint-initdb.d/init-db-separated.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  s3:
+    image: rustfs/rustfs@sha256:733d4ae406e89864f9f51a1b55a13e2ef8b90a6f1e551e05900dcc812e6dfd6c
+    environment:
+      - RUSTFS_ACCESS_KEY=rustfsadmin
+      - RUSTFS_SECRET_KEY=rustfssecret
+    ports:
+      - "127.0.0.1:9000:9000"
+  s3-init:
+    image: curlimages/curl@sha256:58adaa4e8dca9c988bae2aba4ab3434a0bb2da16bbe3f92dec39ec7785166777
+    depends_on:
+      - s3
+    environment: *app-env
+    volumes:
+      - ./softhsm/generated/dev-pki/chains:/chains:ro
+    entrypoint: [""]
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        s3() { curl -sSf --aws-sigv4 "aws:amz:$$S3_REGION:s3" --user "$$S3_ACCESS_KEY:$$S3_SECRET_KEY" "$$@" -o /dev/null; }
+        S3_ENDPOINT="$${S3_ENDPOINT%/}"
+        until s3 "$$S3_ENDPOINT/"; do
+          echo "waiting for s3..."; sleep 1;
+        done
+        s3 -X PUT "$$S3_ENDPOINT/$$S3_BUCKET" || true
+        # S3 object keys mirror the app's derivation from the HSM key label (<slot>/<keyLabel>.pem).
+        s3 -T /chains/mdvm_attestation.pem "$$S3_ENDPOINT/$$S3_BUCKET/TEST_SLOT/softhsm-mdvm_attestation.pem"
+        s3 -T /chains/wpb_wia_auth.pem "$$S3_ENDPOINT/$$S3_BUCKET/TEST_SLOT/softhsm-wpb_wia_auth.pem"
+        s3 -T /chains/rwscd_wte_auth.pem "$$S3_ENDPOINT/$$S3_BUCKET/TEST_SLOT/softhsm-rwscd_wte_auth.pem"
+        s3 -T /chains/tsl_wia_auth.pem "$$S3_ENDPOINT/$$S3_BUCKET/TEST_SLOT/softhsm-tsl_wia_auth.pem"
+
+configs:
+  init-db-separated:
+    content: |
+      CREATE DATABASE mdvm;
+      CREATE DATABASE rwsca;
+      CREATE DATABASE wpb;
+      CREATE DATABASE pns;

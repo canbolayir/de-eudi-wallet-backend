@@ -493,9 +493,7 @@ class RwscaApi(
                 httpRequest,
                 REQUIRED_SIGNATURE_DELETE_ACCOUNT_COMPONENTS,
             ).authKey
-        val account = rwscaAccountService.findAccount(rwscaAccountId, wiMdvmAuthPubk)
-
-        rwscaAccountService.deleteAccount(account.rwscaAccountId)
+        rwscaAccountService.deleteAccount(rwscaAccountId, wiMdvmAuthPubk)
     }
 
     private suspend fun authorizeOperation(

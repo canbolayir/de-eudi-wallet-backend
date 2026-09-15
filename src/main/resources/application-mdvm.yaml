@@ -1,0 +1,14 @@
+spring:
+  config:
+    import: classpath:service/mdvm.yaml
+  flyway:
+    locations: classpath:migration/mdvm
+    ignore-migration-patterns:
+      - "*:missing"
+      - "*:future"
+  application:
+    name: mdvm-backend
+
+info:
+  application:
+    name: EUDI-Wallet MDVM backend service

@@ -18,6 +18,12 @@ enum class PushMetricOutcome {
     NO_REGISTRATION,
 }
 
+enum class HsmRetryOutcome {
+    RECOVERED,
+    EXHAUSTED,
+    NO_FREE_SESSION,
+}
+
 @Component
 class MetricsService(
     private val openTelemetry: OpenTelemetry,
@@ -35,6 +41,26 @@ class MetricsService(
     private val pushPublishFailureCounter by lazy {
         meter.counterBuilder("${METRICS_PREFIX}push_notification_publish_failure")
             .setDescription("Push notifications dropped because the publish to the topic failed")
+            .build()
+    }
+
+    private val walletRevocationConsumedCounter by lazy {
+        meter.counterBuilder("${METRICS_PREFIX}wallet_revocation_consumed")
+            .setDescription("Wallet Instance revocation events consumed, by module and what they hit")
+            .build()
+    }
+
+    private val hsmPkcs11ErrorCounter by lazy {
+        meter.counterBuilder("${METRICS_PREFIX}hsm_pkcs11_errors")
+            .setDescription("Failed PKCS#11 calls, including ones a retry recovered from, by slot, function and rv")
+            .build()
+    }
+
+    private val hsmSessionRetryCounter by lazy {
+        meter.counterBuilder("${METRICS_PREFIX}hsm_session_retries")
+            .setDescription(
+                "HSM operations retried on another pooled session after a session-level failure, by outcome",
+            )
             .build()
     }
 
@@ -57,6 +83,31 @@ class MetricsService(
         pushNotificationCounter.add(1, Attributes.of(stringKey("outcome"), outcome.name.lowercase()))
 
     fun countPushPublishFailure() = pushPublishFailureCounter.add(1)
+
+    fun countWalletRevocationConsumed(
+        module: String,
+        outcome: String,
+    ) = walletRevocationConsumedCounter.add(
+        1,
+        Attributes.of(stringKey("module"), module, stringKey("outcome"), outcome),
+    )
+
+    fun countHsmPkcs11Error(
+        slot: String,
+        function: String,
+        returnValue: String,
+    ) = hsmPkcs11ErrorCounter.add(
+        1,
+        Attributes.of(stringKey("slot"), slot, stringKey("function"), function, stringKey("rv"), returnValue),
+    )
+
+    fun countHsmSessionRetry(
+        slot: String,
+        outcome: HsmRetryOutcome,
+    ) = hsmSessionRetryCounter.add(
+        1,
+        Attributes.of(stringKey("slot"), slot, stringKey("outcome"), outcome.name.lowercase()),
+    )
 
     fun setPrimaryKeyExpiryDate(
         lineage: String,

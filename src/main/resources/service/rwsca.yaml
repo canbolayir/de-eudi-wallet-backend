@@ -1,0 +1,8 @@
+rwsca:
+  enabled: true
+  issuer: german-national-wallet:rwsca:${deployment.environment}
+  rwscd-master-key-prefix: ${hsm.key-prefix}-rwscd_master_key
+  rwscd-wte-auth-key-prefix: ${hsm.key-prefix}-rwscd_wte_auth
+  rwscd-pin-symk-prefix: ${hsm.key-prefix}-rwscd_pin_symk
+  rwscd-aead-symk-prefix: ${hsm.key-prefix}-rwscd_aead_symk
+  rwscd-wte-root-cert-path: ${pki.nw-root-cert-path}

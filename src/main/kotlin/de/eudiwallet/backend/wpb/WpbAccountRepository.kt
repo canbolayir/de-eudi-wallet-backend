@@ -1,6 +1,5 @@
 package de.eudiwallet.backend.wpb
 
-import kotlinx.coroutines.flow.Flow
 import org.springframework.data.r2dbc.repository.Query
 import org.springframework.data.relational.core.mapping.Column
 import org.springframework.data.relational.core.mapping.Table
@@ -60,5 +59,7 @@ interface WpbAccountRepository : CoroutineCrudRepository<WpbAccountEntity, UUID>
         RETURNING $WPB_ACCOUNT_ID_COLUMN
         """,
     )
-    fun revokeByWiHandleReturningIds(wiHandle: String): Flow<UUID>
+    suspend fun revokeByWiHandleReturningId(wiHandle: String): UUID?
+
+    suspend fun existsByWiHandleAndRevokedAtIsNotNull(wiHandle: String): Boolean
 }

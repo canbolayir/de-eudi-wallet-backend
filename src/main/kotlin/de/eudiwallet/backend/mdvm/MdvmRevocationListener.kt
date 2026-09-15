@@ -1,8 +1,8 @@
 package de.eudiwallet.backend.mdvm
 
-import de.eudiwallet.backend.shared.messaging.MessagingUnavailableException
-import de.eudiwallet.backend.shared.messaging.PushNotificationPublisher
+import de.eudiwallet.backend.shared.messaging.Module
 import de.eudiwallet.backend.shared.messaging.WalletInstanceRevocationEvent
+import de.eudiwallet.backend.shared.messaging.report
 import de.eudiwallet.backend.shared.telemetry.MetricsService
 import de.eudiwallet.backend.shared.telemetry.TelemetryService
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -16,7 +16,6 @@ import org.springframework.stereotype.Component
 @ConditionalOnProperty(prefix = "messaging.kafka", name = ["enabled"], havingValue = "true")
 class MdvmRevocationListener(
     private val mdvmAccountService: MdvmAccountService,
-    private val pushNotificationPublisher: PushNotificationPublisher,
     private val json: Json,
     private val telemetryService: TelemetryService,
     private val metricsService: MetricsService,
@@ -27,16 +26,8 @@ class MdvmRevocationListener(
     fun onRevocation(payload: String) {
         telemetryService.withSpanSync("MdvmRevocationListener.onRevocation") {
             val event = json.decodeFromString<WalletInstanceRevocationEvent>(payload)
-            runBlocking {
-                mdvmAccountService.revokeByWiHandle(event.wiHandle)?.let { accountId ->
-                    try {
-                        pushNotificationPublisher.publish(revocationPushNotification(accountId))
-                    } catch (ex: MessagingUnavailableException) {
-                        metricsService.countPushPublishFailure()
-                        log.error(ex) { "Dropping revocation push for $accountId, the revocation itself stands" }
-                    }
-                }
-            }
+            runBlocking { mdvmAccountService.revokeByWiHandle(event.wiHandle) }
+                .report(Module.MDVM, event, metricsService, log)
         }
     }
 }

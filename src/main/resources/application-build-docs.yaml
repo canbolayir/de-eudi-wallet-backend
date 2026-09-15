@@ -1,0 +1,53 @@
+deployment:
+  environment: build-docs
+
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+
+spring:
+  flyway:
+    enabled: false
+  r2dbc:
+    url: r2dbc:postgresql://empty
+
+pki:
+  nw-root-cert-path: file:build-docs
+  mdvm-root-cert-path: file:build-docs
+
+s3:
+  endpoint: http://build-docs
+  region: build-docs
+  bucket: build-docs
+  access-key: build-docs
+  secret-key: build-docs
+
+hsm:
+  module-library: build-docs
+  slot-label: build-docs
+  slot-pin: build-docs
+
+rwsca:
+  wi-slot:
+    label: build-docs
+    pin: build-docs
+
+android:
+  integrity:
+    expected-package-names: org.example.wallet
+    expected-signer-fingerprints: 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00
+    minimal-android-version: 14.0.0
+    patch-level-freshness: 12
+    minimal-app-version: 1204
+ios:
+  integrity:
+    minimal-os-version: "18.0"
+    minimal-build-number: 22A3351
+    acceptable-bundle-id-list: org.example.wallet
+    app-id: "0000000000"
+    counter-jump-logging-threshold: 5
+otel:
+  sdk:
+    disabled: true

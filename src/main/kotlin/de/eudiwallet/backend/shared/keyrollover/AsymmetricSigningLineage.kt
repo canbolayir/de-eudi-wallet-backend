@@ -15,9 +15,8 @@ import kotlinx.coroutines.CoroutineDispatcher
 import java.security.SecureRandom
 import java.security.Signature
 import java.security.cert.X509Certificate
+import java.time.Clock
 import java.time.Instant
-import java.time.LocalDate
-import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicReference
 
 private const val POP_CHALLENGE_BYTES = 32
@@ -25,8 +24,10 @@ private const val POP_CHALLENGE_BYTES = 32
 data class CertifiedKey(
     val keyId: HsmKeyId,
     val chain: List<X509Certificate>,
-    val endDate: LocalDate,
-)
+    val expiresAt: Instant,
+) {
+    fun heldKey(): HeldKey = HeldKey(keyId, expiresAt)
+}
 
 class AsymmetricSigningLineage(
     override val name: String,
@@ -37,6 +38,7 @@ class AsymmetricSigningLineage(
     private val s3CertChainProvider: S3CertChainProvider,
     private val ioDispatcher: CoroutineDispatcher,
     private val metricsService: MetricsService,
+    private val clock: Clock = Clock.systemDefaultZone(),
 ) : RefreshableLineage,
     KeySource<CertifiedKey> {
     private val log = KotlinLogging.logger {}
@@ -44,14 +46,19 @@ class AsymmetricSigningLineage(
 
     private val held = AtomicReference<CertifiedKey?>(null)
 
-    override fun current(): CertifiedKey = requireNotNull(held.get()) { "$name lineage has no resolved key" }
+    override fun current(): CertifiedKey {
+        val key = requireNotNull(held.get()) { "$name lineage has no resolved key" }
+        val heldKey = key.heldKey()
+        if (heldKey.isExpiredAt(Instant.now(clock))) throw ExpiredKeyException(name, heldKey)
+        return key
+    }
 
     fun initialize() = roll(failFast = true)
 
     override fun refresh() = roll(failFast = false)
 
     private fun roll(failFast: Boolean) {
-        val candidates = scanKeys().findActiveKeys(Instant.now())
+        val candidates = scanKeys().findActiveKeys(Instant.now(clock))
         if (candidates.isEmpty()) {
             check(!failFast) { "$name has no valid key in the HSM scan for prefix '$keyPrefix'" }
             logHoldingLastGood("no valid key in HSM scan for prefix '$keyPrefix'")
@@ -65,37 +72,46 @@ class AsymmetricSigningLineage(
         candidates: List<HsmKey>,
         failFast: Boolean,
     ) {
-        val heldKeyId = held.get()?.keyId
+        val heldKey = held.get()?.heldKey()
+        val holdUsable = heldKey != null && !heldKey.isExpiredAt(Instant.now(clock))
         var firstFailure: Exception? = null
         for (candidate in candidates) {
-            if (candidate.keyId == heldKeyId) return
             val resolved =
                 try {
-                    resolveCertifiedKey(candidate).also(::signProofOfPossession)
+                    val certified = resolveCertifiedKey(candidate)
+                    signProofOfPossession(certified)
+                    check(!certified.heldKey().isExpiredAt(Instant.now(clock))) {
+                        "${candidate.keyId} resolved but already expired at ${certified.expiresAt}"
+                    }
+                    certified
                 } catch (e: Exception) {
                     firstFailure = firstFailure ?: e
-                    log.warn(e) {
-                        "$name (prefix '$keyPrefix'): ${candidate.keyId} did not resolve; " +
-                            "falling back to the next-newest valid key"
-                    }
-                    continue
+                    log.warn(e) { "$name (prefix '$keyPrefix'): ${candidate.keyId} did not resolve" }
+                    null
                 }
-            val previous = held.getAndSet(resolved)
-            metricsService.setPrimaryKeyExpiryDate(name, resolved.endDate)
-            log.info { "$name: rolled over ${previous?.keyId} -> ${resolved.keyId}" }
-            return
+            if (resolved != null) {
+                commit(resolved)
+                return
+            }
+            if (candidate.keyId == heldKey?.keyId && holdUsable) break
         }
         if (failFast) throw checkNotNull(firstFailure) { "$name has no resolvable valid key" }
         logHoldingLastGood("no valid key resolved")
     }
 
+    private fun commit(resolved: CertifiedKey) {
+        val previous = held.getAndSet(resolved)
+        if (resolved == previous) return
+        metricsService.setPrimaryKeyExpiryDate(name, resolved.expiresAt.lastUsableDay())
+        log.info { "$name: adopted ${resolved.keyId}, expires ${resolved.expiresAt}, replacing ${previous?.keyId}" }
+    }
+
     private fun logHoldingLastGood(reason: String) {
-        val heldKey = held.get()
-        val today = Instant.now().atZone(TimeZone.getDefault().toZoneId()).toLocalDate()
-        if (heldKey != null && heldKey.endDate.isBefore(today)) {
+        val heldKey = held.get()?.heldKey()
+        if (heldKey != null && heldKey.isExpiredAt(Instant.now(clock))) {
             log.error {
-                "$name: $reason; held key ${heldKey.keyId} expired on ${heldKey.endDate} — now signing with an " +
-                    "expired key"
+                "$name: $reason; held key ${heldKey.keyId} expired at ${heldKey.expiresAt} — refusing to sign " +
+                    "until a valid key resolves"
             }
         } else {
             log.warn { "$name: $reason; holding still-valid ${heldKey?.keyId}" }
@@ -103,8 +119,11 @@ class AsymmetricSigningLineage(
     }
 
     private fun resolveCertifiedKey(key: HsmKey): CertifiedKey {
-        val chain = s3CertChainProvider.getVerifiedChain(key.certObjectKey(slotLabel), trustAnchor)
-        return CertifiedKey(key.keyId, chain.filterNot { it.encoded.contentEquals(trustAnchor.encoded) }, key.endDate)
+        val chain =
+            s3CertChainProvider.getVerifiedChain(key.certObjectKey(slotLabel), trustAnchor)
+                .filterNot { it.encoded.contentEquals(trustAnchor.encoded) }
+        val certificatesExpireAt = (chain + trustAnchor).minOf { it.notAfter.toInstant() }
+        return CertifiedKey(key.keyId, chain, minOf(key.expiresAt(), certificatesExpireAt))
     }
 
     private fun signProofOfPossession(candidate: CertifiedKey) {
@@ -128,10 +147,10 @@ class AsymmetricSigningLineage(
     private fun scanKeys(): List<HsmKey> =
         runBlockingWithTelemetry(ioDispatcher) {
             hsmProvider.use("Scan $name keys") { hsm ->
-                hsm.findKeysByPrefix(keyPrefix, Instant.now(), HsmKeyClass.EcPrivate)
+                hsm.findKeysByPrefix(keyPrefix, Instant.now(clock), HsmKeyClass.EcPrivate)
             }
         }
 }
 
 fun stubCertifiedKeySource(): KeySource<CertifiedKey> =
-    KeySource { CertifiedKey(HsmKeyId(STUB), emptyList(), LocalDate.MAX) }
+    KeySource { CertifiedKey(HsmKeyId(STUB), emptyList(), Instant.MAX) }

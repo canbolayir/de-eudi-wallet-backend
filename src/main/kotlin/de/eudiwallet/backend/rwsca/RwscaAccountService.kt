@@ -4,6 +4,7 @@ import de.eudiwallet.backend.shared.crypto.ecPublicKeyFromX509
 import de.eudiwallet.backend.shared.crypto.jwkThumbprint
 import de.eudiwallet.backend.shared.crypto.toCanonicalP256
 import de.eudiwallet.backend.shared.mdvmtoken.MdvmAccountId
+import de.eudiwallet.backend.shared.messaging.WalletInstanceRevocationOutcome
 import de.eudiwallet.backend.shared.telemetry.TelemetryService
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service
@@ -51,15 +52,6 @@ class RwscaAccountService(
                     throw KeyAlreadyRegisteredException(ex)
                 }
             savedEntity.toAccountWithoutPin()
-        }
-
-    suspend fun findAccount(
-        id: RwscaAccountId,
-        authPubKey: ECPublicKey,
-    ): RwscaAccount =
-        telemetryService.withSpan("RwscaService.findAccount") {
-            val entity = repository.findByRwscaAccountId(id.id) ?: throw AccountNotFoundException()
-            entity.verifyAuthPubKey(authPubKey).toAccount()
         }
 
     suspend fun findActiveAccount(
@@ -196,13 +188,26 @@ class RwscaAccountService(
             }
         }
 
-    suspend fun deleteAccount(id: RwscaAccountId) =
-        telemetryService.withSpan("RwscaService.deleteAccount") {
-            repository.deleteByRwscaAccountId(id.id)
-        }
+    @Transactional
+    suspend fun deleteAccount(
+        id: RwscaAccountId,
+        authPubKey: ECPublicKey,
+    ) = telemetryService.withSpan("RwscaService.deleteAccount") {
+        val entity = repository.findByRwscaAccountIdForUpdate(id.id) ?: throw AccountNotFoundException()
+        entity.verifyAuthPubKey(authPubKey).requireNotRevoked()
+        repository.deleteByRwscaAccountId(id.id)
+    }
 
-    suspend fun revokeByWiHandle(wiHandle: String) =
+    suspend fun revokeByWiHandle(wiHandle: String): WalletInstanceRevocationOutcome =
         telemetryService.withSpan("RwscaService.revokeByWiHandle") {
-            repository.revokeByWiHandle(wiHandle)
+            when {
+                repository.revokeByWiHandle(wiHandle) > 0 -> WalletInstanceRevocationOutcome.APPLIED
+
+                repository.existsByWiHandleAndRevokedAtIsNotNull(
+                    wiHandle,
+                ) -> WalletInstanceRevocationOutcome.ALREADY_REVOKED
+
+                else -> WalletInstanceRevocationOutcome.UNKNOWN_HANDLE
+            }
         }
 }

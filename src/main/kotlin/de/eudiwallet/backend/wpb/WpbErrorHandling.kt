@@ -3,6 +3,7 @@ package de.eudiwallet.backend.wpb
 import de.eudiwallet.backend.shared.challengetoken.ChallengeVerificationException
 import de.eudiwallet.backend.shared.hsm.HsmException
 import de.eudiwallet.backend.shared.httpsignature.SignatureVerificationException
+import de.eudiwallet.backend.shared.jwt.JwtException
 import de.eudiwallet.backend.shared.mdvmtoken.MdvmTokenVerificationException
 import de.eudiwallet.backend.shared.messaging.MessagingUnavailableException
 import de.eudiwallet.backend.shared.telemetry.TelemetryService
@@ -71,8 +72,15 @@ class WpbErrorHandler(
     }
 
     @ExceptionHandler(ChallengeVerificationException::class)
-    fun handleChallengeVerification(e: ChallengeVerificationException) =
-        createErrorResponseEntity(WpbErrorResponseCode.CHALLENGE_VERIFICATION_FAILURE, e)
+    fun handleChallengeVerification(e: ChallengeVerificationException): ResponseEntity<WpbErrorResponse> {
+        val errorCode =
+            if (e.cause is JwtException.Expired) {
+                WpbErrorResponseCode.CHALLENGE_EXPIRED
+            } else {
+                WpbErrorResponseCode.CHALLENGE_VERIFICATION_FAILURE
+            }
+        return createErrorResponseEntity(errorCode, e)
+    }
 
     @ExceptionHandler(MdvmTokenVerificationException::class)
     fun handleMdvmTokenVerification(e: MdvmTokenVerificationException) =
@@ -162,6 +170,7 @@ enum class WpbErrorResponseCode(
     HSM_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "HSM is temporarily unavailable, please retry later"),
     BAD_REQUEST(HttpStatus.BAD_REQUEST, "The request is malformed"),
     CHALLENGE_VERIFICATION_FAILURE(HttpStatus.BAD_REQUEST, "Challenge verification failed"),
+    CHALLENGE_EXPIRED(HttpStatus.BAD_REQUEST, "Challenge expired"),
     MDVM_TOKEN_VERIFICATION_FAILURE(HttpStatus.UNAUTHORIZED, "MDVM token verification failed"),
     SIGNATURE_VERIFICATION_FAILURE(HttpStatus.UNAUTHORIZED, "Signature verification failed"),
     MALFORMED_WIA_PUB_KEY(HttpStatus.BAD_REQUEST, "Malformed $WI_WIA_PUBK_FIELD"),

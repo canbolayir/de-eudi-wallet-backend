@@ -36,6 +36,11 @@ class StatusListEntity(
     val exhaustedAt: Instant?,
 )
 
+data class CursorAdvance(
+    val startIndex: Int,
+    val taken: Int,
+)
+
 data class ListShape(
     val bitsPerEntry: Int,
     val size: Int,
@@ -81,32 +86,33 @@ interface StatusListRepository : CoroutineCrudRepository<StatusListEntity, UUID>
 
     @Query(
         """
-        UPDATE $STATUS_LIST_TABLE
-        SET cursor = cursor + :take,
-            exhausted_at = CASE WHEN cursor + :take = size THEN now() ELSE exhausted_at END
-        WHERE id = :listId AND cursor + :take <= size
-        RETURNING (cursor - :take) AS start_index
+        UPDATE $STATUS_LIST_TABLE s
+        SET cursor = LEAST(o.old_cursor + :take, s.size),
+            exhausted_at = CASE WHEN o.old_cursor + :take >= s.size THEN now() ELSE s.exhausted_at END
+        FROM (SELECT id, cursor AS old_cursor FROM $STATUS_LIST_TABLE WHERE id = :listId AND cursor < size FOR UPDATE) o
+        WHERE s.id = o.id
+        RETURNING o.old_cursor AS start_index, LEAST(o.old_cursor + :take, s.size) - o.old_cursor AS taken
         """,
     )
     suspend fun advanceCursor(
         listId: UUID,
         take: Int,
-    ): Int?
+    ): CursorAdvance?
 
     @Query(
         """
         UPDATE $STATUS_LIST_TABLE
-        SET data = set_byte(data, :byteIndex, (get_byte(data, :byteIndex) & :clearMask) | :setBits),
+        SET data = status_list_apply_bytes(data, :byteIndexes, :clearMasks, :setBits),
             version = version + 1
         WHERE id = :listId
         RETURNING version
         """,
     )
-    suspend fun updateStatusBit(
+    suspend fun updateStatusBytes(
         listId: UUID,
-        byteIndex: Int,
-        clearMask: Int,
-        setBits: Int,
+        byteIndexes: Array<Int>,
+        clearMasks: Array<Int>,
+        setBits: Array<Int>,
     ): Int?
 
     @Query(

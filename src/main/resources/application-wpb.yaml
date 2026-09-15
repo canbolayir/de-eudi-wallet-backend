@@ -1,0 +1,16 @@
+spring:
+  config:
+    import: classpath:service/wpb.yaml
+  flyway:
+    locations:
+      - classpath:migration/wpb
+      - classpath:migration/statuslist
+    ignore-migration-patterns:
+      - "*:missing"
+      - "*:future"
+  application:
+    name: wpb-backend
+
+info:
+  application:
+    name: EUDI-Wallet WPB backend service

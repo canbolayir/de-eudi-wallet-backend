@@ -1,0 +1,22 @@
+spring:
+  config:
+    import:
+      - classpath:service/mdvm.yaml
+      - classpath:service/rwsca.yaml
+      - classpath:service/wpb.yaml
+      - classpath:service/pns.yaml
+  flyway:
+    locations:
+      - classpath:migration/statuslist
+      - classpath:migration/mdvm
+      - classpath:migration/rwsca
+      - classpath:migration/wpb
+      - classpath:migration/pns
+
+management:
+  endpoint:
+    health:
+      group:
+        readiness:
+          include: readinessState, r2dbc, hsm, rwscaWiHsm
+          show-details: always

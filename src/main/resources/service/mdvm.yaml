@@ -1,0 +1,5 @@
+mdvm:
+  enabled: true
+  issuer: german-national-wallet:mdvm:${deployment.environment}
+  mdvm-auth-prvk-prefix: ${hsm.key-prefix}-mdvm_attestation
+  mdvm-root-cert-path: ${pki.mdvm-root-cert-path}

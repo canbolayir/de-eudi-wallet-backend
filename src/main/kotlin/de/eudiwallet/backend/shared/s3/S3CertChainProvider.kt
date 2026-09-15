@@ -4,10 +4,6 @@ import de.eudiwallet.backend.shared.crypto.BOUNCY_CASTLE_PROVIDER
 import de.eudiwallet.backend.shared.crypto.x509CertificateFactory
 import io.github.oshai.kotlinlogging.KotlinLogging
 import org.springframework.stereotype.Component
-import software.amazon.awssdk.core.exception.SdkException
-import software.amazon.awssdk.services.s3.S3Client
-import software.amazon.awssdk.services.s3.model.GetObjectRequest
-import software.amazon.awssdk.services.s3.model.NoSuchKeyException
 import java.security.cert.CertPathValidator
 import java.security.cert.CertPathValidatorException
 import java.security.cert.CertificateException
@@ -24,7 +20,7 @@ class S3CertChainException(
 
 @Component
 class S3CertChainProvider(
-    private val s3Client: S3Client,
+    private val s3Client: S3ObjectClient,
     private val properties: S3Properties,
 ) {
     init {
@@ -43,15 +39,10 @@ class S3CertChainProvider(
 
     private fun fetch(objectKey: String): ByteArray =
         try {
-            s3Client.getObjectAsBytes(
-                GetObjectRequest.builder()
-                    .bucket(properties.bucket)
-                    .key(objectKey)
-                    .build(),
-            ).asByteArray()
-        } catch (e: NoSuchKeyException) {
+            s3Client.getObject(properties.bucket, objectKey)
+        } catch (e: S3ObjectNotFoundException) {
             throw S3CertChainException("Certificate object not found: ${properties.bucket}/$objectKey", e)
-        } catch (e: SdkException) {
+        } catch (e: S3ClientException) {
             throw S3CertChainException("Failed to read certificate object ${properties.bucket}/$objectKey", e)
         }
 

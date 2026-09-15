@@ -1,0 +1,20 @@
+deployment:
+  environment: ci-test
+android:
+  integrity:
+    expected-package-names: org.example.wallet
+    expected-signer-fingerprints: 00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00
+    allow-skip-key-attestation: true
+    allow-software-key-attestation: true
+    minimal-android-version: 14.0.0
+    patch-level-freshness: 12
+    minimal-app-version: 1204
+ios:
+  integrity:
+    minimal-os-version: "18.0"
+    minimal-build-number: 22A3351
+    acceptable-bundle-id-list: org.example.wallet
+    app-id: "0000000000"
+    counter-jump-logging-threshold: 5
+    allow-app-attest-dev-environment: true
+    allow-skip-key-attestation: true

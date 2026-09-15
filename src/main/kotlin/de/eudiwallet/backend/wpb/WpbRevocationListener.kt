@@ -1,7 +1,11 @@
 package de.eudiwallet.backend.wpb
 
+import de.eudiwallet.backend.shared.messaging.Module
 import de.eudiwallet.backend.shared.messaging.WalletInstanceRevocationEvent
+import de.eudiwallet.backend.shared.messaging.report
+import de.eudiwallet.backend.shared.telemetry.MetricsService
 import de.eudiwallet.backend.shared.telemetry.TelemetryService
+import io.github.oshai.kotlinlogging.KotlinLogging
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -14,12 +18,16 @@ class WpbRevocationListener(
     private val wpbAccountService: WpbAccountService,
     private val json: Json,
     private val telemetryService: TelemetryService,
+    private val metricsService: MetricsService,
 ) {
+    private val log = KotlinLogging.logger {}
+
     @KafkaListener(topics = [$$"${wallet-revocation.topic}"], groupId = $$"${wallet-revocation.group.wpb}")
     fun onRevocation(payload: String) {
         telemetryService.withSpanSync("WpbRevocationListener.onRevocation") {
             val event = json.decodeFromString<WalletInstanceRevocationEvent>(payload)
             runBlocking { wpbAccountService.revokeByWiHandle(event.wiHandle) }
+                .report(Module.WPB, event, metricsService, log)
         }
     }
 }

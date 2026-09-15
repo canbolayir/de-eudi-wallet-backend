@@ -3,6 +3,7 @@ package de.eudiwallet.backend.rwsca
 import de.eudiwallet.backend.shared.challengetoken.ChallengeVerificationException
 import de.eudiwallet.backend.shared.hsm.HsmException
 import de.eudiwallet.backend.shared.httpsignature.SignatureVerificationException
+import de.eudiwallet.backend.shared.jwt.JwtException
 import de.eudiwallet.backend.shared.mdvmtoken.MdvmTokenVerificationException
 import de.eudiwallet.backend.shared.telemetry.TelemetryService
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -122,8 +123,15 @@ class RwscaErrorHandler(
         createErrorResponseEntity(RwscaErrorResponseCode.WRAPPED_PRVK_VERIFICATION_FAILURE, e)
 
     @ExceptionHandler(ChallengeVerificationException::class)
-    fun handleChallengeVerification(e: ChallengeVerificationException) =
-        createErrorResponseEntity(RwscaErrorResponseCode.CHALLENGE_VERIFICATION_FAILURE, e)
+    fun handleChallengeVerification(e: ChallengeVerificationException): ResponseEntity<RwscaErrorResponse> {
+        val errorCode =
+            if (e.cause is JwtException.Expired) {
+                RwscaErrorResponseCode.CHALLENGE_EXPIRED
+            } else {
+                RwscaErrorResponseCode.CHALLENGE_VERIFICATION_FAILURE
+            }
+        return createErrorResponseEntity(errorCode, e)
+    }
 
     @ExceptionHandler(MdvmTokenVerificationException::class)
     fun handleMdvmTokenVerification(e: MdvmTokenVerificationException) =
@@ -209,6 +217,7 @@ enum class RwscaErrorResponseCode(
     HSM_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "HSM is temporarily unavailable, please retry later"),
     BAD_REQUEST(HttpStatus.BAD_REQUEST, "The request is malformed"),
     CHALLENGE_VERIFICATION_FAILURE(HttpStatus.BAD_REQUEST, "Challenge verification failed"),
+    CHALLENGE_EXPIRED(HttpStatus.BAD_REQUEST, "Challenge expired"),
     MDVM_TOKEN_VERIFICATION_FAILURE(HttpStatus.UNAUTHORIZED, "Malformed MDVM token"),
     SIGNATURE_VERIFICATION_FAILURE(HttpStatus.UNAUTHORIZED, "Signature verification failed"),
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Internal server error"),

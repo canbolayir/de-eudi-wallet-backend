@@ -1,0 +1,15 @@
+spring:
+  config:
+    import: classpath:service/pns.yaml
+  flyway:
+    locations:
+      - classpath:migration/pns
+    ignore-migration-patterns:
+      - "*:missing"
+      - "*:future"
+  application:
+    name: pns-backend
+
+info:
+  application:
+    name: EUDI-Wallet PNS backend service

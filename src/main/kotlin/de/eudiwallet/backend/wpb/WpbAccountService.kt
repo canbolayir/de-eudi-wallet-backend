@@ -6,11 +6,11 @@ import de.eudiwallet.backend.shared.crypto.toCanonicalP256
 import de.eudiwallet.backend.shared.mdvmtoken.MdvmAccountId
 import de.eudiwallet.backend.shared.messaging.Module
 import de.eudiwallet.backend.shared.messaging.WalletInstanceRevocationEvent
+import de.eudiwallet.backend.shared.messaging.WalletInstanceRevocationOutcome
 import de.eudiwallet.backend.shared.telemetry.TelemetryService
 import de.eudiwallet.backend.statuslist.StatusListEntryException
 import de.eudiwallet.backend.statuslist.StatusListService
 import de.eudiwallet.backend.statuslist.StatusReference
-import kotlinx.coroutines.flow.toList
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -72,30 +72,50 @@ class WpbAccountService(
         }
 
     @Transactional
-    suspend fun revokeByWiHandle(wiHandle: String) =
+    suspend fun revokeByWiHandle(wiHandle: String): WalletInstanceRevocationOutcome =
         telemetryService.withSpan("WpbAccountService.revokeByWiHandle") {
-            val revokedAccountIds = repository.revokeByWiHandleReturningIds(wiHandle).toList()
-            revokedAccountIds.forEach { statusListService.revokeAccountEntries(it) }
+            val revokedAccountId = repository.revokeByWiHandleReturningId(wiHandle)
+            when {
+                revokedAccountId != null -> {
+                    statusListService.revokeAccountEntries(revokedAccountId)
+                    WalletInstanceRevocationOutcome.APPLIED
+                }
+
+                repository.existsByWiHandleAndRevokedAtIsNotNull(wiHandle) -> {
+                    WalletInstanceRevocationOutcome.ALREADY_REVOKED
+                }
+
+                else -> {
+                    WalletInstanceRevocationOutcome.UNKNOWN_HANDLE
+                }
+            }
         }
 
-    @Transactional
-    suspend fun findAccountAndProvisionWiaEntry(
+    suspend fun findActiveAccount(
         id: WpbAccountId,
         authPubKey: ECPublicKey,
+    ): WpbAccount =
+        telemetryService.withSpan("WpbAccountService.findActiveAccount") {
+            val entity = repository.findByWpbAccountId(id.id) ?: throw AccountNotFoundException()
+            WpbAccount.fromEntity(entity.verifyAuthPubKey(authPubKey).requireNotRevoked())
+        }
+
+    suspend fun provisionWiaEntry(
+        account: WpbAccount,
         clientInstanceId: UUID?,
     ): StatusReference =
-        telemetryService.withSpan("WpbAccountService.findAccountAndProvisionWiaEntry") {
-            val entity = repository.findByWpbAccountIdForShare(id.id) ?: throw AccountNotFoundException()
-            entity.verifyAuthPubKey(authPubKey).requireNotRevoked()
-            if (clientInstanceId != null) {
-                try {
-                    statusListService.reuse(clientInstanceId, entity.wpbAccountId, WPB_WIA_POOL)
-                } catch (_: StatusListEntryException) {
-                    statusListService.allocate(entity.wpbAccountId, WPB_WIA_POOL)
-                }
-            } else {
-                statusListService.allocate(entity.wpbAccountId, WPB_WIA_POOL)
-            }
+        telemetryService.withSpan("WpbAccountService.provisionWiaEntry") {
+            val accountId = account.wpbAccountId.id
+            val reference =
+                clientInstanceId?.let {
+                    try {
+                        statusListService.reuse(it, accountId, WPB_WIA_POOL)
+                    } catch (_: StatusListEntryException) {
+                        null
+                    }
+                } ?: statusListService.allocate(accountId, WPB_WIA_POOL)
+            (repository.findByWpbAccountIdForShare(accountId) ?: throw AccountNotFoundException()).requireNotRevoked()
+            reference
         }
 
     private fun WpbAccountEntity.verifyAuthPubKey(authPubKey: ECPublicKey): WpbAccountEntity {
@@ -118,7 +138,7 @@ class WpbAccountService(
         authPubKey: ECPublicKey,
     ) = telemetryService.withSpan("WpbAccountService.deleteAccount") {
         val entity = repository.findByWpbAccountIdForUpdate(id.id) ?: throw AccountNotFoundException()
-        entity.verifyAuthPubKey(authPubKey)
+        entity.verifyAuthPubKey(authPubKey).requireNotRevoked()
 
         statusListService.revokeAccountEntries(entity.wpbAccountId)
         repository.deleteByWpbAccountId(entity.wpbAccountId)

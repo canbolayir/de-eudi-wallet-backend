@@ -2,6 +2,7 @@ package de.eudiwallet.backend.pns
 
 import de.eudiwallet.backend.shared.challengetoken.ChallengeVerificationException
 import de.eudiwallet.backend.shared.httpsignature.SignatureVerificationException
+import de.eudiwallet.backend.shared.jwt.JwtException
 import de.eudiwallet.backend.shared.mdvmtoken.MdvmTokenVerificationException
 import de.eudiwallet.backend.shared.telemetry.TelemetryService
 import io.github.oshai.kotlinlogging.KotlinLogging
@@ -37,8 +38,15 @@ class PnsErrorHandler(
         createErrorResponseEntity(PnsErrorResponseCode.SIGNATURE_VERIFICATION_FAILURE, e)
 
     @ExceptionHandler(ChallengeVerificationException::class)
-    fun handleChallengeVerification(e: ChallengeVerificationException) =
-        createErrorResponseEntity(PnsErrorResponseCode.CHALLENGE_VERIFICATION_FAILURE, e)
+    fun handleChallengeVerification(e: ChallengeVerificationException): ResponseEntity<PnsErrorResponse> {
+        val errorCode =
+            if (e.cause is JwtException.Expired) {
+                PnsErrorResponseCode.CHALLENGE_EXPIRED
+            } else {
+                PnsErrorResponseCode.CHALLENGE_VERIFICATION_FAILURE
+            }
+        return createErrorResponseEntity(errorCode, e)
+    }
 
     @ExceptionHandler(MdvmTokenVerificationException::class)
     fun handleMdvmTokenVerification(e: MdvmTokenVerificationException) =
@@ -83,6 +91,7 @@ enum class PnsErrorResponseCode(
     DB_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "DB temporarily unavailable, please retry later"),
     BAD_REQUEST(HttpStatus.BAD_REQUEST, "The request is malformed"),
     CHALLENGE_VERIFICATION_FAILURE(HttpStatus.BAD_REQUEST, "Challenge verification failed"),
+    CHALLENGE_EXPIRED(HttpStatus.BAD_REQUEST, "Challenge expired"),
     MDVM_TOKEN_VERIFICATION_FAILURE(HttpStatus.UNAUTHORIZED, "MDVM token verification failed"),
     SIGNATURE_VERIFICATION_FAILURE(HttpStatus.UNAUTHORIZED, "Signature verification failed"),
     INTERNAL_SERVER_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Internal server error"),

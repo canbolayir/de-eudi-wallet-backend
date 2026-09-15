@@ -39,8 +39,8 @@ class MakotoConfiguration(
                             )
                         },
                     attestationStatementValiditySeconds = 1.hours.inWholeSeconds,
-                    androidVersion = androidConfig.minimalAndroidVersion?.androidVersionAsNumber(),
-                    patchLevel = androidConfig.patchLevelFreshness?.asPatchLevel(),
+                    androidVersion = androidConfig.minimalAndroidVersion.androidVersionAsNumber(),
+                    patchLevel = androidConfig.patchLevelFreshness.asPatchLevel(),
                     allowBootloaderUnlock = false,
                     revocation =
                         listOf(

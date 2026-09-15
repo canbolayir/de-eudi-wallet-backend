@@ -2,7 +2,13 @@ package de.eudiwallet.backend.mdvm
 
 import de.eudiwallet.backend.mdvm.MdvmAccount.Companion.toStorage
 import de.eudiwallet.backend.shared.mdvmtoken.MdvmAccountId
+import de.eudiwallet.backend.shared.messaging.MessagingUnavailableException
+import de.eudiwallet.backend.shared.messaging.PushNotificationPublisher
+import de.eudiwallet.backend.shared.messaging.WalletInstanceRevocationOutcome
+import de.eudiwallet.backend.shared.telemetry.MetricsService
 import de.eudiwallet.backend.shared.telemetry.TelemetryService
+import io.github.oshai.kotlinlogging.KotlinLogging
+import org.springframework.beans.factory.ObjectProvider
 import org.springframework.dao.DuplicateKeyException
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
@@ -13,10 +19,14 @@ import java.util.UUID
 class MdvmAccountService(
     private val mdvmAccountRepository: MdvmAccountRepository,
     private val telemetryService: TelemetryService,
+    private val metricsService: MetricsService,
+    private val pushNotificationPublisherProvider: ObjectProvider<PushNotificationPublisher>,
 ) {
+    private val log = KotlinLogging.logger {}
+
     suspend fun createIosAccount(
         authPubk: ECPublicKey,
-        deviceClass: DeviceInfo,
+        deviceClass: IosDeviceInfo,
         deviceAttestation: IosDeviceAttestationData?,
         deviceAssertion: IosDeviceAssertionData?,
     ): MdvmAccount =
@@ -35,7 +45,7 @@ class MdvmAccountService(
 
     suspend fun createAndroidAccount(
         authPubk: ECPublicKey,
-        deviceClass: DeviceInfo,
+        deviceClass: AndroidDeviceInfo,
         attestationData: AndroidDeviceAttestationData?,
     ): MdvmAccount =
         telemetryService.withSpan("MdvmAccountService.createAndroidAccount") {
@@ -62,10 +72,37 @@ class MdvmAccountService(
             mdvmAccountRepository.findByMdvmWiId(accountId.id)?.toDomain() ?: throw AccountNotFound(accountId)
         }
 
-    suspend fun revokeByWiHandle(wiHandle: String): MdvmAccountId? =
+    suspend fun revokeByWiHandle(wiHandle: String): WalletInstanceRevocationOutcome =
         telemetryService.withSpan("MdvmAccountService.revokeByWiHandle") {
-            mdvmAccountRepository.revokeByWiHandleReturningId(wiHandle)?.let { MdvmAccountId(it) }
+            val revokedId = mdvmAccountRepository.revokeByWiHandleReturningId(wiHandle)
+            val revokedBeforeId =
+                if (revokedId == null) mdvmAccountRepository.findRevokedMdvmWiIdByWiHandle(wiHandle) else null
+            when {
+                revokedId != null -> {
+                    publishRevocationPush(MdvmAccountId(revokedId))
+                    WalletInstanceRevocationOutcome.APPLIED
+                }
+
+                revokedBeforeId != null -> {
+                    publishRevocationPush(MdvmAccountId(revokedBeforeId))
+                    WalletInstanceRevocationOutcome.ALREADY_REVOKED
+                }
+
+                else -> {
+                    WalletInstanceRevocationOutcome.UNKNOWN_HANDLE
+                }
+            }
         }
+
+    private suspend fun publishRevocationPush(accountId: MdvmAccountId) {
+        val publisher = pushNotificationPublisherProvider.getIfAvailable() ?: return
+        try {
+            publisher.publish(revocationPushNotification(accountId))
+        } catch (ex: MessagingUnavailableException) {
+            metricsService.countPushPublishFailure()
+            log.error(ex) { "Dropping revocation push for $accountId, the revocation itself stands" }
+        }
+    }
 
     @Transactional
     suspend fun saveNonRevokedAccount(
@@ -88,8 +125,13 @@ class MdvmAccountService(
             )
         }
 
+    @Transactional
     suspend fun deleteMdvmAccount(accountId: MdvmAccountId) =
         telemetryService.withSpan("MdvmAccountService.deleteMdvmAccount") {
+            val account =
+                mdvmAccountRepository.findByMdvmWiIdForUpdate(accountId.id)?.toDomain()
+                    ?: throw AccountNotFound(accountId)
+            account.requireNotRevoked()
             mdvmAccountRepository.deleteByMdvmWiId(accountId.id)
         }
 }

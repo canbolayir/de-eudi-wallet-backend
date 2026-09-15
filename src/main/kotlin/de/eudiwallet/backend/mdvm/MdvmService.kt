@@ -18,6 +18,7 @@ import de.eudiwallet.backend.mdvm.AndroidAttestationDetails.Companion.toAndroidA
 import de.eudiwallet.backend.shared.crypto.fromBase64
 import de.eudiwallet.backend.shared.crypto.toBase64
 import de.eudiwallet.backend.shared.json.toPostgresJson
+import de.eudiwallet.backend.shared.mdvmtoken.MdvmAccountId
 import de.eudiwallet.backend.shared.telemetry.TelemetryService
 import io.github.oshai.kotlinlogging.KotlinLogging
 import io.r2dbc.postgresql.codec.Json
@@ -202,6 +203,29 @@ class MdvmService(
             }
         }
 
+    fun logCounterJumpIfRequired(
+        mdvmAccountId: MdvmAccountId,
+        previousCounter: Long?,
+        newCounter: Long?,
+    ) {
+        if (previousCounter == null ||
+            newCounter == null ||
+            newCounter - previousCounter < iosConfig.counterJumpLoggingThreshold
+        ) {
+            return
+        }
+        log.atWarn {
+            message = "Unexpected iOS assertion counter jump"
+            payload =
+                mapOf(
+                    "mdvm.security_event" to "IOS_ASSERTION_COUNTER_JUMP",
+                    "mdvm.account_id" to mdvmAccountId.toString(),
+                    "mdvm.previous_assertion_counter" to previousCounter,
+                    "mdvm.new_assertion_counter" to newCounter,
+                )
+        }
+    }
+
     private fun buildIosClientData(
         publicKey: ECPublicKey,
         expectedNonce: ByteArray,
@@ -243,6 +267,7 @@ class MdvmService(
 
     fun verifyAndroidDeviceProperties(
         attestedDetails: AndroidAttestationDetails,
+        deviceClass: AndroidDeviceInfo,
         storedDetails: AndroidAttestationDetails?,
     ) {
         verifyAndroidKeyStorage(attestedDetails)
@@ -251,6 +276,8 @@ class MdvmService(
         verifyAndroidPatchLevel(attestedDetails)
         verifyAndroidApplication(attestedDetails.packageInfo)
         storedDetails?.let { verifyAndroidDevicePlausibility(attestedDetails, it) }
+        verifyAndroidVulnerableDeviceClass(attestedDetails)
+        verifyAndroidDeviceInfo(attestedDetails, deviceClass)
     }
 
     private fun verifyAndroidKeyStorage(details: AndroidAttestationDetails) {
@@ -283,20 +310,18 @@ class MdvmService(
     }
 
     private fun verifyAndroidOsVersion(details: AndroidAttestationDetails) {
-        val minimalVersion = androidConfig.minimalAndroidVersion ?: return
-        val deviceVersion =
-            details.osVersion?.toSemverOrNull()
-                ?: throw AndroidKeyAttestationException.MinimalOsVersionViolation(details.osVersion, minimalVersion)
+        val minimalVersion = androidConfig.minimalAndroidVersion
+        val deviceVersion = details.parsedAndroidVersion()
         if (deviceVersion.isLowerThan(Semver(minimalVersion, Semver.SemverType.STRICT))) {
             throw AndroidKeyAttestationException.MinimalOsVersionViolation(details.osVersion, minimalVersion)
         }
     }
 
     private fun verifyAndroidPatchLevel(details: AndroidAttestationDetails) {
-        val freshnessInMonths = androidConfig.patchLevelFreshness ?: return
+        val freshnessInMonths = androidConfig.patchLevelFreshness
         val minimalPatchLevel = YearMonth.from(LocalDate.now().minusMonths(freshnessInMonths.toLong()))
         val devicePatchLevel =
-            details.osPatchLevel?.toYearMonthOrNull()
+            details.osPatchLevel?.toYearMonth()
                 ?: throw AndroidKeyAttestationException.MinimalPatchLevelViolation(
                     details.osPatchLevel,
                     minimalPatchLevel.toString(),
@@ -311,26 +336,35 @@ class MdvmService(
 
     private fun verifyAndroidApplication(packageInfo: AndroidPackageInfo?) {
         val expectedPackageNames = androidConfig.expectedPackageNames
-        if (expectedPackageNames.isNotEmpty()) {
-            if (packageInfo?.packageName == null || packageInfo.packageName.none { it in expectedPackageNames }) {
-                throw AndroidKeyAttestationException.PackageNameMismatch(packageInfo?.packageName, expectedPackageNames)
-            }
+        if (packageInfo?.packageName == null || packageInfo.packageName.none { it in expectedPackageNames }) {
+            throw AndroidKeyAttestationException.PackageNameMismatch(packageInfo?.packageName, expectedPackageNames)
         }
-        androidConfig.minimalAppVersion?.let { minimalAppVersion ->
-            val appVersion = packageInfo?.packageVersion
-            if (appVersion == null || appVersion.all { it.toLong() < minimalAppVersion }) {
-                throw AndroidKeyAttestationException.MinimalAppVersionViolation(appVersion, minimalAppVersion)
-            }
+        val minimalAppVersion = androidConfig.minimalAppVersion
+        val appVersion = packageInfo.packageVersion
+        if (appVersion == null || appVersion.all { it.toLong() < minimalAppVersion }) {
+            throw AndroidKeyAttestationException.MinimalAppVersionViolation(appVersion, minimalAppVersion)
         }
         val expectedSignatureDigests =
             androidConfig.expectedSignerFingerprints.map {
                 it.replace(":", "").parseHex().toBase64()
             }
-        if (expectedSignatureDigests.isNotEmpty()) {
-            if (packageInfo?.signatureDigest == null ||
-                packageInfo.signatureDigest.none { it in expectedSignatureDigests }
-            ) {
-                throw AndroidKeyAttestationException.SignatureDigestMismatch(packageInfo?.signatureDigest)
+        val signatureDigest = packageInfo.signatureDigest
+        if (signatureDigest == null || signatureDigest.none { it in expectedSignatureDigests }) {
+            throw AndroidKeyAttestationException.SignatureDigestMismatch(signatureDigest)
+        }
+    }
+
+    private fun verifyAndroidVulnerableDeviceClass(details: AndroidAttestationDetails) {
+        androidConfig.vulnerableClassEntries.forEach { entry ->
+            val affectedClass =
+                entry.affectedClasses.firstOrNull { it.affects(details) && !it.isFixedOn(details) }
+            if (affectedClass != null) {
+                throw AndroidKeyAttestationException.VulnerableDeviceClass(
+                    entry.id,
+                    entry.classification,
+                    affectedClass.fixingPatchLevel,
+                    details.osPatchLevel,
+                )
             }
         }
     }
@@ -355,18 +389,17 @@ class MdvmService(
             storedDetails.attestationIdDevice,
         )
 
-        storedDetails.osVersion?.toSemverOrNull()?.let { storedVersion ->
-            val deviceVersion = attestedDetails.osVersion?.toSemverOrNull()
-            if (deviceVersion == null || deviceVersion.isLowerThan(storedVersion)) {
-                throw AndroidKeyAttestationException.VersionDecrease(
-                    "osVersion",
-                    attestedDetails.osVersion,
-                    storedDetails.osVersion,
-                )
-            }
+        val storedVersion = storedDetails.parsedAndroidVersion()
+        val deviceVersion = attestedDetails.parsedAndroidVersion()
+        if (deviceVersion.isLowerThan(storedVersion)) {
+            throw AndroidKeyAttestationException.VersionDecrease(
+                "osVersion",
+                attestedDetails.osVersion,
+                storedDetails.osVersion,
+            )
         }
-        storedDetails.osPatchLevel?.toYearMonthOrNull()?.let { storedPatchLevel ->
-            val devicePatchLevel = attestedDetails.osPatchLevel?.toYearMonthOrNull()
+        storedDetails.osPatchLevel?.toYearMonth()?.let { storedPatchLevel ->
+            val devicePatchLevel = attestedDetails.osPatchLevel?.toYearMonth()
             if (devicePatchLevel == null || devicePatchLevel.isBefore(storedPatchLevel)) {
                 throw AndroidKeyAttestationException.VersionDecrease(
                     "osPatchLevel",
@@ -399,74 +432,118 @@ class MdvmService(
         }
     }
 
-    private fun String.toSemverOrNull() =
-        try {
-            Semver(this, Semver.SemverType.LOOSE)
-        } catch (ex: SemverException) {
-            log.warn(ex) { "Unparseable Android OS version $this" }
-            null
-        }
+    private fun verifyAndroidDeviceInfo(
+        attestedDetails: AndroidAttestationDetails,
+        deviceClass: AndroidDeviceInfo,
+    ) {
+        verifyDeviceClassValue(
+            "attestationIdModel",
+            deviceClass.model,
+            attestedDetails.attestationIdModel,
+        )
+        verifyDeviceClassValue(
+            "attestationIdProduct",
+            deviceClass.product,
+            attestedDetails.attestationIdProduct,
+        )
+        verifyDeviceClassValue(
+            "attestationIdDevice",
+            deviceClass.device,
+            attestedDetails.attestationIdDevice,
+        )
+    }
 
-    private fun String.toYearMonthOrNull(): YearMonth? {
-        val parts = split(".")
-        val patchLevel =
-            if (parts.size == 2) {
-                runCatching { YearMonth.of(parts[0].toInt(), parts[1].toInt()) }.getOrNull()
-            } else {
-                null
-            }
-        if (patchLevel == null) log.warn { "Unparseable Android security patch level $this" }
-        return patchLevel
+    private fun verifyDeviceClassValue(
+        signal: String,
+        deviceClassValue: String?,
+        attestedValue: String?,
+    ) {
+        if (attestedValue != null && deviceClassValue != attestedValue) {
+            throw AndroidKeyAttestationException.DeviceClassMismatch(signal, deviceClassValue, attestedValue)
+        }
+    }
+
+    private fun AndroidAttestationDetails.parsedAndroidVersion(): Semver {
+        val version = this.osVersion ?: throw AndroidKeyAttestationException.MalformedVersionInformation(this)
+        return try {
+            Semver(version, Semver.SemverType.LOOSE)
+        } catch (ex: SemverException) {
+            throw AndroidKeyAttestationException.MalformedVersionInformation(this, ex)
+        }
     }
 
     fun verifyIosDeviceProperties(
-        requestedDeviceClass: DeviceInfo,
-        storedDeviceClass: DeviceInfo?,
+        requestedDeviceClass: IosDeviceInfo,
+        storedDeviceClass: IosDeviceInfo?,
     ) {
         verifyIosVersion(requestedDeviceClass)
         if (storedDeviceClass != null) {
             verifyIosDevicePlausibility(requestedDeviceClass, storedDeviceClass)
         }
+        verifyIosVulnerableDeviceClass(requestedDeviceClass)
     }
 
-    private fun verifyIosVersion(requestedDeviceClass: DeviceInfo) {
-        val deviceVersion = requestedDeviceClass.parsedVersion()
+    private fun verifyIosVersion(requestedDeviceClass: IosDeviceInfo) {
+        val deviceVersion = requestedDeviceClass.parsedSystemVersion()
         if (deviceVersion.isLowerThan(iosConfig.minimalOsVersion)) {
             throw IosKeyAttestationException.MinimalVersionViolation(
-                requestedDeviceClass.info["systemVersion"],
+                requestedDeviceClass.systemVersion,
                 iosConfig.minimalOsVersion,
             )
         }
     }
 
-    private fun verifyIosDevicePlausibility(
-        requestedDeviceClass: DeviceInfo,
-        storedDeviceClass: DeviceInfo,
-    ) {
-        if (requestedDeviceClass.info["model"] != storedDeviceClass.info["model"]) {
-            throw IosKeyAttestationException.ModelMismatch(
-                requestedDeviceClass.info["model"],
-                storedDeviceClass.info["model"],
-            )
+    private fun verifyIosVulnerableDeviceClass(requestedDeviceClass: IosDeviceInfo) {
+        val deviceModel = requestedDeviceClass.hardwareModel
+        val deviceVersion = requestedDeviceClass.parsedSystemVersion()
+        iosConfig.vulnerableClassEntries.forEach { entry ->
+            val affectedClass =
+                entry.affectedClasses.firstOrNull { it.affects(deviceModel) && !it.isFixedOn(deviceVersion) }
+            if (affectedClass != null) {
+                throw IosKeyAttestationException.VulnerableDeviceClass(
+                    entry.id,
+                    entry.classification,
+                    affectedClass.fixingOsVersion,
+                    requestedDeviceClass.systemVersion,
+                )
+            }
         }
-        val deviceVersion = requestedDeviceClass.parsedVersion()
-        val storedVersion = storedDeviceClass.parsedVersion()
+    }
+
+    private fun verifyIosDevicePlausibility(
+        requestedDeviceClass: IosDeviceInfo,
+        storedDeviceClass: IosDeviceInfo,
+    ) {
+        requireIosStableValue("model", requestedDeviceClass.model, storedDeviceClass.model)
+        requireIosStableValue("hardwareModel", requestedDeviceClass.hardwareModel, storedDeviceClass.hardwareModel)
+        val deviceVersion = requestedDeviceClass.parsedSystemVersion()
+        val storedVersion = storedDeviceClass.parsedSystemVersion()
         if (deviceVersion.isLowerThan(storedVersion)) {
             throw IosKeyAttestationException.VersionDecrease(
-                requestedDeviceClass.info["systemVersion"],
-                storedDeviceClass.info["systemVersion"],
+                requestedDeviceClass.systemVersion,
+                storedDeviceClass.systemVersion,
             )
         }
     }
 
-    private fun DeviceInfo.parsedVersion(): Semver {
-        if (info["systemVersion"] == null) {
+    private fun IosDeviceInfo.parsedSystemVersion(): Semver {
+        if (systemVersion.isBlank()) {
             throw IosKeyAttestationException.MalformedVersionInformation(this)
         }
         return try {
-            Semver(info["systemVersion"], Semver.SemverType.LOOSE)
+            Semver(systemVersion, Semver.SemverType.LOOSE)
         } catch (ex: SemverException) {
             throw IosKeyAttestationException.MalformedVersionInformation(this, ex)
+        }
+    }
+
+    private fun requireIosStableValue(
+        signal: String,
+        deviceValue: String?,
+        storedValue: String?,
+    ) {
+        if (storedValue != null && deviceValue != storedValue) {
+            throw IosKeyAttestationException.ModelMismatch(signal, deviceValue, storedValue)
         }
     }
 }

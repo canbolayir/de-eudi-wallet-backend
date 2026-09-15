@@ -85,6 +85,11 @@ interface MdvmAccountRepository : CoroutineCrudRepository<MdvmAccountEntity, UUI
         @Param(MDVM_ACCOUNT_ID_PARAM) mdvmWiId: UUID,
     ): MdvmAccountEntity?
 
+    @Query("SELECT * FROM $DEVICE_ACCOUNT_TABLE WHERE $MDVM_WI_ID_COLUMN = :$MDVM_ACCOUNT_ID_PARAM FOR UPDATE")
+    suspend fun findByMdvmWiIdForUpdate(
+        @Param(MDVM_ACCOUNT_ID_PARAM) mdvmWiId: UUID,
+    ): MdvmAccountEntity?
+
     @Modifying
     @Query("DELETE FROM $DEVICE_ACCOUNT_TABLE WHERE $MDVM_WI_ID_COLUMN = :$MDVM_ACCOUNT_ID_PARAM")
     suspend fun deleteByMdvmWiId(
@@ -94,13 +99,23 @@ interface MdvmAccountRepository : CoroutineCrudRepository<MdvmAccountEntity, UUI
     @Query(
         """
         UPDATE $DEVICE_ACCOUNT_TABLE
-        SET $REVOKED_AT_COLUMN = COALESCE($REVOKED_AT_COLUMN, now()),
+        SET $REVOKED_AT_COLUMN = now(),
             $VERSION_COLUMN = $VERSION_COLUMN + 1
-        WHERE $WI_HANDLE_COLUMN = :$WI_HANDLE_PARAM
+        WHERE $WI_HANDLE_COLUMN = :$WI_HANDLE_PARAM AND $REVOKED_AT_COLUMN IS NULL
         RETURNING $MDVM_WI_ID_COLUMN
     """,
     )
     suspend fun revokeByWiHandleReturningId(
+        @Param(WI_HANDLE_PARAM) wiHandle: String,
+    ): UUID?
+
+    @Query(
+        """
+        SELECT $MDVM_WI_ID_COLUMN FROM $DEVICE_ACCOUNT_TABLE
+        WHERE $WI_HANDLE_COLUMN = :$WI_HANDLE_PARAM AND $REVOKED_AT_COLUMN IS NOT NULL
+        """,
+    )
+    suspend fun findRevokedMdvmWiIdByWiHandle(
         @Param(WI_HANDLE_PARAM) wiHandle: String,
     ): UUID?
 

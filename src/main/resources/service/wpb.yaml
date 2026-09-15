@@ -1,0 +1,25 @@
+wpb:
+  enabled: true
+  issuer: german-national-wallet:wpb:${deployment.environment}
+  wpb-wia-auth-key-prefix: ${hsm.key-prefix}-wpb_wia_auth
+  wpb-wia-root-cert-path: ${pki.nw-root-cert-path}
+
+statuslist:
+  enabled: true
+  public-url: ${STATUSLIST_PUBLIC_URL}
+  path-segment: wpb
+  gc:
+    interval: PT24H
+    initial-delay: PT1H
+    batch-size: 5000
+    list-delete-slack: P1D
+  pools:
+    wpb-wia:
+      entries-per-list: 100000
+      bits-per-entry: 1
+      reservation-size: 64
+      issuer: ${wpb.issuer}
+      ttl: PT1H
+      lifetime: P60D
+      tsl-auth-key-prefix: ${hsm.key-prefix}-tsl_wia_auth
+      tsl-root-cert-path: ${pki.nw-root-cert-path}

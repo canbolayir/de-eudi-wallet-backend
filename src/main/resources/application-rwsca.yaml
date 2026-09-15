@@ -1,0 +1,21 @@
+spring:
+  config:
+    import: classpath:service/rwsca.yaml
+  flyway:
+    locations: classpath:migration/rwsca
+    ignore-migration-patterns:
+      - "*:missing"
+      - "*:future"
+  application:
+    name: rwsca-backend
+
+info:
+  application:
+    name: EUDI-Wallet RWSCA backend service
+
+management:
+  endpoint:
+    health:
+      group:
+        readiness:
+          include: readinessState, r2dbc, hsm, rwscaWiHsm

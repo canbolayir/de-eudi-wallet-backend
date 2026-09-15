@@ -9,6 +9,7 @@ import de.eudiwallet.backend.shared.crypto.toBase64
 import de.eudiwallet.backend.shared.json.fromPostgresJson
 import de.eudiwallet.backend.shared.json.toPostgresJson
 import de.eudiwallet.backend.shared.mdvmtoken.MdvmAccountId
+import io.r2dbc.postgresql.codec.Json
 import kotlinx.datetime.number
 import kotlinx.serialization.Serializable
 import java.security.interfaces.ECPublicKey
@@ -38,6 +39,16 @@ data class MdvmAccount(
         }
     }
 
+    fun androidDeviceClass(): AndroidDeviceInfo {
+        require(deviceClass is AndroidDeviceInfo)
+        return deviceClass
+    }
+
+    fun iosDeviceClass(): IosDeviceInfo {
+        require(deviceClass is IosDeviceInfo)
+        return deviceClass
+    }
+
     fun toEntity(): MdvmAccountEntity =
         MdvmAccountEntity(
             id = UUID.randomUUID(),
@@ -58,7 +69,11 @@ data class MdvmAccount(
                 mdvmAccountId = MdvmAccountId(entity.mdvmWiId),
                 authPublicKey = entity.mdvmAuthPubk.ecPublicKeyFromX509(),
                 deviceType = entity.deviceType,
-                deviceClass = DeviceInfo(entity.deviceClass.fromPostgresJson()),
+                deviceClass =
+                    when (entity.deviceType) {
+                        DeviceType.ANDROID -> entity.deviceClass.fromPostgresJson<AndroidDeviceInfo>()
+                        DeviceType.IOS -> entity.deviceClass.fromPostgresJson<IosDeviceInfo>()
+                    },
                 androidDeviceAttestation = entity.androidAttestationDetails?.fromPostgresJson(),
                 iosDeviceAttestation = entity.iosDeviceAttestation?.fromPostgresJson(),
                 iosDeviceAssertion = entity.iosDeviceAssertion?.fromPostgresJson(),
@@ -66,7 +81,11 @@ data class MdvmAccount(
                 updatedAt = entity.updatedAt,
             )
 
-        fun DeviceInfo.toStorage() = info.toPostgresJson()
+        fun DeviceInfo.toStorage(): Json =
+            when (this) {
+                is AndroidDeviceInfo -> toPostgresJson()
+                is IosDeviceInfo -> toPostgresJson()
+            }
 
         fun AndroidAttestationDetails?.toStorage() = this?.toPostgresJson()
 
@@ -76,10 +95,26 @@ data class MdvmAccount(
     }
 }
 
-@JvmInline
-value class DeviceInfo(
-    val info: Map<String, String>,
-)
+sealed interface DeviceInfo
+
+@Serializable
+data class AndroidDeviceInfo(
+    val model: String,
+    val device: String,
+    val product: String,
+    val hardware: String,
+    val versionPatch: String,
+    val versionRelease: String,
+) : DeviceInfo
+
+@Serializable
+data class IosDeviceInfo(
+    val model: String,
+    val hardwareModel: String?,
+    val uname: String,
+    val osVersion: String,
+    val systemVersion: String,
+) : DeviceInfo
 
 @Serializable
 data class AndroidPackageInfo(

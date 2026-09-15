@@ -51,6 +51,8 @@ private const val MDVM_ATTESTATION_KEY = "mdvm.attestation"
 private const val MDVM_ATTESTATION_RESULT_KEY = "mdvm.attestation_result"
 private const val MDVM_SIGNAL_KEY = "mdvm.signal"
 private const val MDVM_DEBUG_INFO_KEY = "mdvm.debug_info"
+private const val MDVM_DEVICE_VALUE_KEY = "mdvm.device_value"
+private const val MDVM_STORED_VALUE_KEY = "mdvm.stored_value"
 const val MDVM_INTERNAL_ERROR_CODE_KEY = "mdvm.internal_error_code"
 
 fun Throwable?.exceptionDiagnostics(): Map<String, String> =
@@ -205,6 +207,19 @@ abstract class AndroidKeyAttestationException(
             )
     }
 
+    class MalformedVersionInformation(
+        private val attestationDetails: AndroidAttestationDetails,
+        override val cause: Throwable? = null,
+    ) : AndroidKeyAttestationException("Device version is missing or malformed") {
+        override val internalErrorCode get() = InternalErrorCode.KA_MALFORMED_OS_VERSION
+
+        override fun diagnosticDetails() =
+            mapOf(
+                MDVM_ERROR_KEY to "MalformedVersionInformation",
+                "mdvm.attestation_os_versions" to (attestationDetails.osVersion ?: "unknown"),
+            ) + cause.exceptionDiagnostics()
+    }
+
     class MinimalAppVersionViolation(
         private val appVersion: List<UInt>?,
         private val minimalAppVersion: Long,
@@ -242,8 +257,24 @@ abstract class AndroidKeyAttestationException(
             mapOf(
                 MDVM_ERROR_KEY to "DeviceMismatch",
                 MDVM_SIGNAL_KEY to signal,
-                "mdvm.device_value" to (deviceValue ?: "unknown"),
-                "mdvm.stored_value" to (storedValue ?: "unknown"),
+                MDVM_DEVICE_VALUE_KEY to (deviceValue ?: "unknown"),
+                MDVM_STORED_VALUE_KEY to (storedValue ?: "unknown"),
+            )
+    }
+
+    class DeviceClassMismatch(
+        private val signal: String,
+        private val classValue: String?,
+        private val attestedValue: String?,
+    ) : AndroidKeyAttestationException("Device class data does not match the attested device") {
+        override val internalErrorCode get() = InternalErrorCode.KA_DEVICE_CLASS_MISMATCH
+
+        override fun diagnosticDetails() =
+            mapOf(
+                MDVM_ERROR_KEY to "DeviceClassMismatch",
+                MDVM_SIGNAL_KEY to signal,
+                "mdvm.device_class_value" to (classValue ?: "unknown"),
+                MDVM_DEVICE_VALUE_KEY to (attestedValue ?: "unknown"),
             )
     }
 
@@ -258,8 +289,31 @@ abstract class AndroidKeyAttestationException(
             mapOf(
                 MDVM_ERROR_KEY to "VersionDecrease",
                 MDVM_SIGNAL_KEY to signal,
-                "mdvm.device_value" to (deviceValue ?: "unknown"),
-                "mdvm.stored_value" to (storedValue ?: "unknown"),
+                MDVM_DEVICE_VALUE_KEY to (deviceValue ?: "unknown"),
+                MDVM_STORED_VALUE_KEY to (storedValue ?: "unknown"),
+            )
+    }
+
+    class VulnerableDeviceClass(
+        private val vulnerabilityId: String,
+        private val classification: VulnerabilityClassification,
+        private val fixingPatchLevel: String?,
+        private val devicePatchLevel: String?,
+    ) : AndroidKeyAttestationException("Attested device class is affected by a known vulnerability") {
+        override val internalErrorCode
+            get() =
+                when (classification) {
+                    VulnerabilityClassification.FIXABLE -> InternalErrorCode.DV_VULNERABLE_DEVICE_CLASS_FIXABLE
+                    VulnerabilityClassification.UNFIXABLE -> InternalErrorCode.DV_VULNERABLE_DEVICE_CLASS_UNFIXABLE
+                }
+
+        override fun diagnosticDetails() =
+            mapOf(
+                MDVM_ERROR_KEY to "VulnerableDeviceClass",
+                "mdvm.vulnerability_id" to vulnerabilityId,
+                "mdvm.vulnerability_classification" to classification.name,
+                "mdvm.fixing_patch_level" to (fixingPatchLevel ?: "none"),
+                "mdvm.device_patch_level" to (devicePatchLevel ?: "unknown"),
             )
     }
 }
@@ -415,16 +469,18 @@ abstract class IosKeyAttestationException(
     }
 
     class ModelMismatch(
-        private val deviceModel: String?,
-        private val storedModel: String?,
-    ) : IosKeyAttestationException("Device model does not match the stored value") {
+        private val signal: String,
+        private val deviceValue: String?,
+        private val storedValue: String?,
+    ) : IosKeyAttestationException("Attested device model does not match the stored device") {
         override val internalErrorCode get() = InternalErrorCode.IDP_MODEL_MISMATCH
 
         override fun diagnosticDetails() =
             mapOf(
                 MDVM_ERROR_KEY to "ModelMismatch",
-                "mdvm.device_model" to (deviceModel ?: "unknown"),
-                "mdvm.stored_model" to (storedModel ?: "unknown"),
+                MDVM_SIGNAL_KEY to signal,
+                MDVM_DEVICE_VALUE_KEY to (deviceValue ?: "unknown"),
+                MDVM_STORED_VALUE_KEY to (storedValue ?: "unknown"),
             )
     }
 
@@ -456,8 +512,31 @@ abstract class IosKeyAttestationException(
             )
     }
 
+    class VulnerableDeviceClass(
+        private val vulnerabilityId: String,
+        private val classification: VulnerabilityClassification,
+        private val fixingOsVersion: String?,
+        private val deviceVersion: String?,
+    ) : IosKeyAttestationException("Device class is affected by a known vulnerability") {
+        override val internalErrorCode
+            get() =
+                when (classification) {
+                    VulnerabilityClassification.FIXABLE -> InternalErrorCode.DV_VULNERABLE_DEVICE_CLASS_FIXABLE
+                    VulnerabilityClassification.UNFIXABLE -> InternalErrorCode.DV_VULNERABLE_DEVICE_CLASS_UNFIXABLE
+                }
+
+        override fun diagnosticDetails() =
+            mapOf(
+                MDVM_ERROR_KEY to "VulnerableDeviceClass",
+                "mdvm.vulnerability_id" to vulnerabilityId,
+                "mdvm.vulnerability_classification" to classification.name,
+                "mdvm.fixing_os_version" to (fixingOsVersion ?: "none"),
+                "mdvm.device_version" to (deviceVersion ?: "unknown"),
+            )
+    }
+
     class MalformedVersionInformation(
-        private val deviceInfo: DeviceInfo,
+        private val deviceInfo: IosDeviceInfo,
         override val cause: Throwable? = null,
     ) : IosKeyAttestationException("Device version is missing or malformed") {
         override val internalErrorCode get() = InternalErrorCode.IDP_MALFORMED_OS_VERSION
@@ -465,7 +544,7 @@ abstract class IosKeyAttestationException(
         override fun diagnosticDetails() =
             mapOf(
                 MDVM_ERROR_KEY to "MalformedVersionInformation",
-                "mdvm.device_info" to deviceInfo.info.toJson(),
+                "mdvm.device_info" to deviceInfo.toJson(),
             ) + cause.exceptionDiagnostics()
     }
 }
@@ -657,6 +736,14 @@ enum class MdvmErrorResponseCode(
     OUTDATED_PATCH_LEVEL(HttpStatus.FORBIDDEN, "Device OS doesn't have required security patches"),
     OUTDATED_APP_VERSION(HttpStatus.FORBIDDEN, "Wallet app version is no longer supported"),
     INVALID_BOOTLOADER_STATE(HttpStatus.FORBIDDEN, "Device bootloader is unlocked"),
+    DEVICE_VULNERABLE_FIXABLE(
+        HttpStatus.FORBIDDEN,
+        "The device class is affected by a security vulnerability that can be resolved by a system update",
+    ),
+    DEVICE_VULNERABLE_UNFIXABLE(
+        HttpStatus.FORBIDDEN,
+        "The device class is affected by a security vulnerability that can not be resolved by a system update",
+    ),
     KEY_ALREADY_REGISTERED(HttpStatus.CONFLICT, "An account is already registered for this key"),
     SIGNATURE_VERIFICATION_FAILURE(HttpStatus.UNAUTHORIZED, "Signature verification failed"),
     CHALLENGE_VERIFICATION_FAILURE(HttpStatus.BAD_REQUEST, "Challenge verification failed"),
@@ -699,6 +786,8 @@ enum class InternalErrorCode(
     KA_SIGNATURE_DIGEST_MISMATCH(MdvmErrorResponseCode.SECURITY_VIOLATION),
     KA_PLAUSIBILITY_DEVICE_MISMATCH(MdvmErrorResponseCode.SECURITY_VIOLATION),
     KA_PLAUSIBILITY_VERSION_DECREASE(MdvmErrorResponseCode.SECURITY_VIOLATION),
+    KA_MALFORMED_OS_VERSION(MdvmErrorResponseCode.BAD_REQUEST),
+    KA_DEVICE_CLASS_MISMATCH(MdvmErrorResponseCode.SECURITY_VIOLATION),
 
     DV_MALFORMED_KEY(MdvmErrorResponseCode.MALFORMED_KEY),
     DV_ACCOUNT_NOT_FOUND(MdvmErrorResponseCode.ACCOUNT_NOT_FOUND),
@@ -706,6 +795,8 @@ enum class InternalErrorCode(
     DV_ACCOUNT_REVOKED(MdvmErrorResponseCode.ACCOUNT_REVOKED),
     DV_KEY_ALREADY_REGISTERED(MdvmErrorResponseCode.KEY_ALREADY_REGISTERED),
     DV_SKIP_INTEGRITY_CHECKS_NOT_ALLOWED(MdvmErrorResponseCode.SKIP_INTEGRITY_CHECKS_NOT_ALLOWED),
+    DV_VULNERABLE_DEVICE_CLASS_FIXABLE(MdvmErrorResponseCode.DEVICE_VULNERABLE_FIXABLE),
+    DV_VULNERABLE_DEVICE_CLASS_UNFIXABLE(MdvmErrorResponseCode.DEVICE_VULNERABLE_UNFIXABLE),
 }
 
 const val TRACE_ID = "trace_id"

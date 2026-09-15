@@ -1,0 +1,17 @@
+config:
+  validation: true
+
+style:
+  ForbiddenComment:
+    active: false
+  WildcardImport:
+    excludeImports:
+      - io.gatling.javaapi.*
+  ThrowsCount:
+    max: 3
+    excludeGuardClauses: true
+
+complexity:
+  LongParameterList:
+    allowedConstructorParameters: 9
+    allowedFunctionParameters: 6
