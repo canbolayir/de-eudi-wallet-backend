@@ -4,6 +4,7 @@ import io.opentelemetry.api.OpenTelemetry
 import io.opentelemetry.api.common.AttributeKey.stringKey
 import io.opentelemetry.api.common.Attributes
 import io.opentelemetry.api.metrics.Meter
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
@@ -27,6 +28,7 @@ enum class HsmRetryOutcome {
 @Component
 class MetricsService(
     private val openTelemetry: OpenTelemetry,
+    @Value($$"${info.application.version}") private val applicationVersion: String,
 ) {
     private val meter: Meter get() = openTelemetry.getMeter("de.eudiwallet.backend")
 
@@ -76,6 +78,13 @@ class MetricsService(
                         Attributes.of(stringKey("lineage"), lineage),
                     )
                 }
+            }
+
+        meter.gaugeBuilder("${METRICS_PREFIX}application_version")
+            .ofLongs()
+            .setDescription("Deployed backend version")
+            .buildWithCallback { measurement ->
+                measurement.record(1, Attributes.of(stringKey("version"), applicationVersion))
             }
     }
 

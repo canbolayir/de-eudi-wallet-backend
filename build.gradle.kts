@@ -1,5 +1,6 @@
 import org.springframework.boot.gradle.tasks.bundling.BootJar
 import java.net.ServerSocket
+import java.time.Duration
 
 plugins {
     alias(libs.plugins.kotlin.jvm)
@@ -14,6 +15,7 @@ plugins {
     alias(libs.plugins.gatling)
     alias(libs.plugins.shadow)
     alias(libs.plugins.serialization)
+    alias(libs.plugins.cyclonedx)
 }
 
 group = "de.eudiwallet"
@@ -115,7 +117,12 @@ kotlin {
     }
 }
 
+shadow {
+    addShadowJarToAssembleLifecycle = false
+}
+
 tasks.withType<Test> {
+    timeout.set(Duration.ofMinutes(20))
     useJUnitPlatform()
     jvmArgs("--enable-native-access=ALL-UNNAMED")
     maxHeapSize = "2g"
@@ -246,4 +253,12 @@ ktlint {
 
 tasks.withType<org.springframework.boot.gradle.tasks.run.BootRun> {
     jvmArgs("--enable-native-access=ALL-UNNAMED")
+}
+
+tasks.named<org.cyclonedx.gradle.CyclonedxDirectTask>("cyclonedxDirectBom") {
+    includeConfigs.set(listOf("runtimeClasspath"))
+}
+
+tasks.withType<org.cyclonedx.gradle.BaseCyclonedxTask> {
+    componentVersion.set(releaseVersion.orElse("unspecified"))
 }

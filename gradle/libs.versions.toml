@@ -1,9 +1,10 @@
 [versions]
+cyclonedx = "3.4.1"
 java = "25"
 kotlin = "2.4.10"
 detekt = "2.0.0-alpha.6"
 spring-boot = "4.1.1"
-kotest = "6.2.4"
+kotest = "6.2.5"
 ktlint = "1.8.0"
 
 [libraries]
@@ -58,6 +59,7 @@ google-auth-library-oauth2-http = { module = "com.google.auth:google-auth-librar
 okhttp-mockwebserver = { module = "com.squareup.okhttp3:mockwebserver3", version = "5.5.0" }
 
 [plugins]
+cyclonedx = { id = "org.cyclonedx.bom", version.ref = "cyclonedx" }
 kotlin-jvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlin-spring = { id = "org.jetbrains.kotlin.plugin.spring", version.ref = "kotlin" }
 spring-boot = { id = "org.springframework.boot", version.ref = "spring-boot" }

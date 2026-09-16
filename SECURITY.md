@@ -2,11 +2,19 @@
 
 ## Reporting a vulnerability
 
-*The bug-bounty program for this project is being set up; its link, scope and reward details will appear here.*
+Report findings through our bug bounty program on HackerOne:
+https://hackerone.com/common_codes. Do not report vulnerabilities via GitHub
+issues.
 
-Findings must be reported through that program (not via GitHub issues).
+## Safe harbour
 
-**Good-faith security research within the program's scope will not result in legal action.**
+Security research conducted in good faith and in accordance with this policy
+and the applicable rules of the bug bounty program
+(https://hackerone.com/common_codes) will not lead to legal action from us. Stay
+within scope, do not access or modify data belonging to other people, and
+maintain the confidentiality of vulnerability information and affected data.
+Vulnerability details may be disclosed only after we have confirmed that the
+vulnerability has been remediated.
 
 ## Scope
 
@@ -16,7 +24,8 @@ Findings that depend on configuration that this repository does not contain are 
 
 ## Known Issues
 
-*Issues already known and tracked internally may be dismissed as duplicates. A list of publicly acknowledged known issues will appear here.*
+Some issues are already known and tracked internally. A report matching one of
+them may be closed as a duplicate without detail.
 
 ## Dependencies
 
