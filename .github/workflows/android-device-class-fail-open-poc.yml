@@ -1,0 +1,70 @@
+name: Android vulnerable-device class fail-open PoC
+
+on:
+  push:
+    branches:
+      - poc/android-device-class-fail-open
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Add regression PoC
+        shell: bash
+        run: |
+          mkdir -p src/test/kotlin/de/eudiwallet/backend/mdvm
+          cat > src/test/kotlin/de/eudiwallet/backend/mdvm/AndroidVulnerableDeviceClassFailOpenPoCTest.kt <<'EOF'
+          package de.eudiwallet.backend.mdvm
+
+          import at.asitplus.attestation.android.AttestationKeyDescription
+          import kotlin.test.Test
+          import kotlin.test.assertFalse
+          import kotlin.test.assertTrue
+
+          class AndroidVulnerableDeviceClassFailOpenPoCTest {
+              @Test
+              fun blockedDeviceClassIsSkippedWhenAttestedModelIsMissing() {
+                  val blockedClass =
+                      AffectedAndroidDeviceClass(
+                          attestationIdModel = "Pixel-Blocked",
+                          fixingPatchLevel = "2099-12",
+                      )
+
+                  val withDeviceId =
+                      AndroidAttestationDetails(
+                          attestationSecurityLevel = AttestationKeyDescription.SecurityLevel.TRUSTED_ENVIRONMENT,
+                          keyMintSecurityLevel = AttestationKeyDescription.SecurityLevel.TRUSTED_ENVIRONMENT,
+                          attestationIdModel = "Pixel-Blocked",
+                          osVersion = "16.0.0",
+                          osPatchLevel = "2026.09",
+                      )
+
+                  val withoutDeviceId = withDeviceId.copy(attestationIdModel = null)
+
+                  assertTrue(blockedClass.affects(withDeviceId))
+                  assertFalse(blockedClass.isFixedOn(withDeviceId))
+
+                  // Vulnerable-device policy FAILS OPEN when the attested identifier is absent.
+                  assertFalse(blockedClass.affects(withoutDeviceId))
+
+                  println("BLOCKLIST_MATCH_WITH_ATTESTED_MODEL=" + blockedClass.affects(withDeviceId))
+                  println("BLOCKLIST_MATCH_WITH_MISSING_ATTESTED_MODEL=" + blockedClass.affects(withoutDeviceId))
+                  println("FAIL_OPEN_CONFIRMED=true")
+              }
+          }
+          EOF
+
+      - name: Run PoC against real backend classes
+        run: ./gradlew test --tests de.eudiwallet.backend.mdvm.AndroidVulnerableDeviceClassFailOpenPoCTest --info
