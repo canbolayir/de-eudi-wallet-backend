@@ -1,0 +1,47 @@
+name: Authorized sandbox API probe
+
+on:
+  push:
+    branches:
+      - research/high-critical-api-probe
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe in-scope endpoints without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="https://wallet-backend-sandbox.apps.sandbox.nwb.youniqx.com"
+          probe_post() {
+            path="$1"
+            echo "===== POST $path ====="
+            tmp="$(mktemp)"
+            code="$(curl -sS --connect-timeout 10 --max-time 20 -o "$tmp" -D /tmp/headers -w '%{http_code}' -X POST "$BASE$path" || true)"
+            echo "HTTP=$code"
+            grep -Ei '^(content-type|cache-control|www-authenticate|server|location|access-control-allow-origin):' /tmp/headers || true
+            head -c 600 "$tmp" || true
+            echo; echo
+          }
+          probe_get() {
+            path="$1"
+            echo "===== GET $path ====="
+            tmp="$(mktemp)"
+            code="$(curl -sS --connect-timeout 10 --max-time 20 -o "$tmp" -D /tmp/headers -w '%{http_code}' "$BASE$path" || true)"
+            echo "HTTP=$code"
+            grep -Ei '^(content-type|cache-control|www-authenticate|server|location|etag|access-control-allow-origin):' /tmp/headers || true
+            head -c 1200 "$tmp" || true
+            echo; echo
+          }
+
+          probe_post "/v1/mdvm/challenge"
+          probe_post "/v1/rwsca/challenge"
+          probe_post "/v1/wpb/challenge"
+          probe_post "/v1/pns/challenge"
+          probe_get "/v1/status-lists/wpb/wpb-wia/aggregation"
