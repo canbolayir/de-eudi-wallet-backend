@@ -1,0 +1,96 @@
+name: RWSCA no-preaccount post-revocation E2E PoC
+
+on:
+  push:
+    branches:
+      - poc/rwsca-revocation-no-preaccount-e2e
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  full-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: gradle
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install PoC dependencies
+        run: python -m pip install --disable-pip-version-check requests cryptography
+
+      - name: Generate local dev PKI and SoftHSM fixtures
+        run: |
+          chmod +x softhsm/gen-keys.sh softhsm/init-slot.sh softhsm/entrypoint.sh
+          ./softhsm/gen-keys.sh
+
+      - name: Build backend jars
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon bootJar bootJarMdvm bootJarRwsca bootJarWpb bootJarPns
+
+      - name: Start isolated local stack
+        run: |
+          docker compose up --build -d app-combined
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:8080/actuator/health/readiness >/tmp/health.json; then
+              cat /tmp/health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose ps
+          docker compose logs --no-color app-combined | tail -n 300
+          exit 1
+
+      - name: Execute exploit through revocation
+        env:
+          POC_BASE_URL: http://127.0.0.1:8080
+          POC_PHASE_MARKER: /tmp/rwsca-poc-state.json
+        run: python poc/rwsca_revocation_no_preaccount_e2e.py
+
+      - name: Prove RWSCA consumed revocation as UNKNOWN_HANDLE
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 60); do
+            LOGS="$(docker compose logs --no-color app-combined 2>&1)"
+            if printf '%s\n' "$LOGS" | grep -F "UNKNOWN_HANDLE" >/dev/null; then
+              printf '%s\n' "$LOGS" | grep -F "UNKNOWN_HANDLE" | tail -n 10
+              echo "RWSCA_REVOCATION_CONSUMER_CONFIRMED_UNKNOWN_HANDLE=true"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "FAIL: RWSCA UNKNOWN_HANDLE log was not observed"
+          docker compose logs --no-color app-combined | tail -n 500
+          exit 1
+
+      - name: Execute post-revocation first registration and HSM signature
+        env:
+          POC_BASE_URL: http://127.0.0.1:8080
+          POC_PHASE2_STATE: /tmp/rwsca-poc-state.json
+        run: python poc/rwsca_revocation_no_preaccount_e2e.py
+
+      - name: Show final relevant backend evidence
+        if: always()
+        run: |
+          echo "=== Relevant revocation logs ==="
+          docker compose logs --no-color app-combined 2>&1 | grep -E "UNKNOWN_HANDLE|Revocation" | tail -n 100 || true
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v --remove-orphans
