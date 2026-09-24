@@ -1,0 +1,61 @@
+name: RWSCA revocation resurrection PoC
+
+on:
+  push:
+    branches:
+      - poc/rwsca-revocation-resurrection
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  poc:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: wallet
+          POSTGRES_USER: wallet
+          POSTGRES_PASSWORD: wallet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wallet -d wallet"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify PoC matches current repository logic
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -Fq 'repository.revokeByWiHandle(wiHandle) > 0 -> WalletInstanceRevocationOutcome.APPLIED'             src/main/kotlin/de/eudiwallet/backend/rwsca/RwscaAccountService.kt
+          grep -Fq 'else -> WalletInstanceRevocationOutcome.UNKNOWN_HANDLE'             src/main/kotlin/de/eudiwallet/backend/rwsca/RwscaAccountService.kt
+          grep -Fq 'WHERE $WI_HANDLE_COLUMN = :wiHandle AND $REVOKED_AT_COLUMN IS NULL'             src/main/kotlin/de/eudiwallet/backend/rwsca/RwscaAccountRepository.kt
+          grep -Fq 'CREATE UNIQUE INDEX rwsca_account_wi_handle'             src/main/resources/migration/rwsca/V22__rwsca_account_unique_key.sql
+          grep -Fq 'CREATE UNIQUE INDEX rwsca_account_mdvm_wi_id'             src/main/resources/migration/rwsca/V30__rwsca_account_mdvm_wi_id.sql
+
+      - name: Install PostgreSQL client
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Run database-level resurrection PoC
+        shell: bash
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: "5432"
+          PGDATABASE: wallet
+          PGUSER: wallet
+          PGPASSWORD: wallet
+        run: |
+          chmod +x poc/rwsca_revocation_db_poc.sh
+          ./poc/rwsca_revocation_db_poc.sh
